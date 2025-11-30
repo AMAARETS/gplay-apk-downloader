@@ -82,6 +82,196 @@ DEFAULT_DEVICE = {
     'SimOperator': '38',
 }
 
+SUPPORTED_ARCHS = ['arm64-v8a', 'armeabi-v7a', 'x86_64', 'x86']
+
+
+def get_device_config(arch='arm64-v8a'):
+    """Get device config for a specific architecture."""
+    config = DEFAULT_DEVICE.copy()
+    if arch in SUPPORTED_ARCHS:
+        config['Platforms'] = arch
+    return config
+
+
+def merge_apks(base_apk_bytes, split_apks_bytes_list):
+    """Merge base APK with split APKs into a single installable APK.
+
+    Uses APKEditor (REAndroid) for proper resource merging.
+
+    Args:
+        base_apk_bytes: Bytes of the base APK
+        split_apks_bytes_list: List of (name, bytes) tuples for split APKs
+
+    Returns:
+        Bytes of the merged APK (unsigned)
+    """
+    import zipfile
+    import io
+    import subprocess
+    import tempfile
+    import shutil
+
+    logger.info(f"merge_apks called with base ({len(base_apk_bytes)} bytes) and {len(split_apks_bytes_list)} splits")
+
+    # Try APKEditor first (best results)
+    apkeditor_jar = os.path.join(os.path.dirname(__file__), 'APKEditor.jar')
+    if os.path.exists(apkeditor_jar):
+        try:
+            return merge_apks_with_apkeditor(base_apk_bytes, split_apks_bytes_list, apkeditor_jar)
+        except Exception as e:
+            logger.error(f"APKEditor merge failed: {e}, falling back to simple merge")
+    else:
+        logger.warning("APKEditor.jar not found, using simple merge")
+
+    return merge_apks_simple(base_apk_bytes, split_apks_bytes_list)
+
+
+def merge_apks_with_apkeditor(base_apk_bytes, split_apks_bytes_list, apkeditor_jar):
+    """Use APKEditor to merge split APKs properly."""
+    import subprocess
+    import tempfile
+    import shutil
+
+    work_dir = tempfile.mkdtemp(prefix='apk_merge_')
+
+    try:
+        # Write base APK
+        base_path = os.path.join(work_dir, 'base.apk')
+        with open(base_path, 'wb') as f:
+            f.write(base_apk_bytes)
+
+        # Write split APKs
+        for i, (name, data) in enumerate(split_apks_bytes_list):
+            split_path = os.path.join(work_dir, f'split{i}.apk')
+            with open(split_path, 'wb') as f:
+                f.write(data)
+
+        # Run APKEditor merge
+        output_path = os.path.join(work_dir, 'merged.apk')
+        result = subprocess.run(
+            ['java', '-jar', apkeditor_jar, 'm', '-i', work_dir, '-o', output_path],
+            capture_output=True, text=True, timeout=300
+        )
+
+        if result.returncode != 0:
+            logger.error(f"APKEditor failed: {result.stderr}")
+            raise Exception(f"APKEditor failed: {result.stderr}")
+
+        if not os.path.exists(output_path):
+            raise Exception("APKEditor did not produce output file")
+
+        with open(output_path, 'rb') as f:
+            merged_bytes = f.read()
+
+        logger.info(f"APKEditor merge successful: {len(merged_bytes)} bytes")
+        return merged_bytes
+
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def should_skip_meta_inf(name):
+    """Skip signature files but keep META-INF/services and other important content."""
+    if not name.startswith('META-INF/'):
+        return False
+    # Skip signature files
+    if name.endswith(('.SF', '.RSA', '.DSA', '.EC', '.MF')):
+        return True
+    if name == 'META-INF/MANIFEST.MF':
+        return True
+    # Keep everything else (services, kotlin_module, version files, etc.)
+    return False
+
+
+def merge_apks_simple(base_apk_bytes, split_apks_bytes_list):
+    """Simple merge without manifest patching."""
+    import zipfile
+    import io
+
+    merged_files = {}
+
+    with zipfile.ZipFile(io.BytesIO(base_apk_bytes), 'r') as base_zip:
+        for name in base_zip.namelist():
+            if should_skip_meta_inf(name):
+                continue
+            merged_files[name] = base_zip.read(name)
+
+    for split_name, split_bytes in split_apks_bytes_list:
+        with zipfile.ZipFile(io.BytesIO(split_bytes), 'r') as split_zip:
+            for name in split_zip.namelist():
+                if should_skip_meta_inf(name):
+                    continue
+                if name == 'AndroidManifest.xml':
+                    continue
+                if name.startswith('lib/') or name not in merged_files:
+                    merged_files[name] = split_zip.read(name)
+
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as merged_zip:
+        for name, data in sorted(merged_files.items()):
+            merged_zip.writestr(name, data)
+
+    return output.getvalue()
+
+
+def sign_apk(apk_bytes):
+    """Sign an APK using apksigner with debug keystore.
+
+    Returns signed APK bytes, or original bytes if signing fails.
+    """
+    import subprocess
+    import tempfile
+    import shutil
+
+    keystore = Path.home() / '.android' / 'debug.keystore'
+    if not keystore.exists():
+        logger.warning("Debug keystore not found, returning unsigned APK")
+        return apk_bytes
+
+    # Check if apksigner is available
+    if not shutil.which('apksigner'):
+        logger.warning("apksigner not found, returning unsigned APK")
+        return apk_bytes
+
+    try:
+        with tempfile.NamedTemporaryFile(suffix='.apk', delete=False) as tmp_in:
+            tmp_in.write(apk_bytes)
+            tmp_in_path = tmp_in.name
+
+        tmp_out_path = tmp_in_path + '.signed'
+
+        # Sign with apksigner using debug keystore
+        cmd = [
+            'apksigner', 'sign',
+            '--ks', str(keystore),
+            '--ks-pass', 'pass:android',
+            '--key-pass', 'pass:android',
+            '--out', tmp_out_path,
+            tmp_in_path
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+
+        if result.returncode == 0 and os.path.exists(tmp_out_path):
+            with open(tmp_out_path, 'rb') as f:
+                signed_bytes = f.read()
+            logger.info("APK signed successfully")
+            return signed_bytes
+        else:
+            logger.warning(f"apksigner failed: {result.stderr}")
+            return apk_bytes
+
+    except Exception as e:
+        logger.error(f"APK signing failed: {e}")
+        return apk_bytes
+    finally:
+        # Cleanup temp files
+        for path in [tmp_in_path, tmp_out_path]:
+            try:
+                os.unlink(path)
+            except:
+                pass
+
 
 def format_size(bytes_size):
     if not bytes_size:
@@ -495,6 +685,12 @@ def download_info_stream(pkg):
     """SSE endpoint that tries unlimited tokens until download URL is obtained."""
     import time
 
+    # Get architecture from query parameter
+    arch = request.args.get('arch', 'arm64-v8a')
+    if arch not in SUPPORTED_ARCHS:
+        arch = 'arm64-v8a'
+    device_config = get_device_config(arch)
+
     def generate():
         attempt = 0
 
@@ -535,7 +731,7 @@ def download_info_stream(pkg):
             yield f"data: {json.dumps({'type': 'progress', 'attempt': attempt, 'message': f'Trying token #{attempt}...'})}\n\n"
 
             try:
-                # Get a fresh token from dispenser
+                # Get a fresh token from dispenser with arch-specific config
                 scraper = cloudscraper.create_scraper()
                 response = scraper.post(
                     DISPENSER_URL,
@@ -543,7 +739,7 @@ def download_info_stream(pkg):
                         'User-Agent': 'com.aurora.store-4.6.1-70',
                         'Content-Type': 'application/json',
                     },
-                    json=DEFAULT_DEVICE,
+                    json=device_config,
                     timeout=30
                 )
 
@@ -644,6 +840,255 @@ def download(pkg, split_index=None):
             headers={'Content-Disposition': f'attachment; filename="{filename}"'}
         )
     except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+import tempfile
+import uuid
+
+# Store temp merged APKs
+TEMP_APKS = {}
+
+
+@app.route('/api/download-merged-stream/<path:pkg>')
+def download_merged_stream(pkg):
+    """SSE endpoint that downloads, merges, signs APKs with progress updates."""
+    import time
+
+    arch = request.args.get('arch', 'arm64-v8a')
+    if arch not in SUPPORTED_ARCHS:
+        arch = 'arm64-v8a'
+    device_config = get_device_config(arch)
+
+    def generate():
+        # Try to get a working token
+        yield f"data: {json.dumps({'type': 'progress', 'step': 'auth', 'message': 'Getting auth token...'})}\n\n"
+
+        auth_data = None
+        info = None
+
+        cached = get_cached_auth()
+        if cached:
+            try:
+                info = get_download_info(pkg, cached)
+                if 'error' not in info:
+                    auth_data = cached
+            except:
+                pass
+
+        if not auth_data:
+            for attempt in range(50):
+                yield f"data: {json.dumps({'type': 'progress', 'step': 'auth', 'message': f'Trying token #{attempt+1}...'})}\n\n"
+                try:
+                    scraper = cloudscraper.create_scraper()
+                    response = scraper.post(
+                        DISPENSER_URL,
+                        headers={
+                            'User-Agent': 'com.aurora.store-4.6.1-70',
+                            'Content-Type': 'application/json',
+                        },
+                        json=device_config,
+                        timeout=30
+                    )
+
+                    if not response.ok:
+                        time.sleep(1)
+                        continue
+
+                    auth_data = response.json()
+                    info = get_download_info(pkg, auth_data)
+
+                    if 'error' not in info:
+                        save_cached_auth(auth_data)
+                        break
+                    else:
+                        auth_data = None
+                        time.sleep(0.5)
+
+                except Exception as e:
+                    time.sleep(0.5)
+
+        if not info or 'error' in info:
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Failed to get download info'})}\n\n"
+            return
+
+        total_files = 1 + len(info.get('splits', []))
+        yield f"data: {json.dumps({'type': 'progress', 'step': 'download', 'message': f'Downloading base APK (1/{total_files})...', 'current': 1, 'total': total_files})}\n\n"
+
+        cookie_header = '; '.join([f"{c['name']}={c['value']}" for c in info.get('cookies', [])])
+        headers = {'Cookie': cookie_header} if cookie_header else {}
+
+        try:
+            base_resp = requests.get(info['downloadUrl'], headers=headers, timeout=120)
+            if not base_resp.ok:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Failed to download base APK'})}\n\n"
+                return
+            base_apk = base_resp.content
+
+            splits_data = []
+            for i, split in enumerate(info.get('splits', [])):
+                split_name = split['name']
+                yield f"data: {json.dumps({'type': 'progress', 'step': 'download', 'message': f'Downloading {split_name} ({i+2}/{total_files})...', 'current': i+2, 'total': total_files})}\n\n"
+                split_resp = requests.get(split['downloadUrl'], headers=headers, timeout=120)
+                if not split_resp.ok:
+                    yield f"data: {json.dumps({'type': 'error', 'message': f'Failed to download {split_name}'})}\n\n"
+                    return
+                splits_data.append((split_name, split_resp.content))
+
+            yield f"data: {json.dumps({'type': 'progress', 'step': 'merge', 'message': 'Merging APKs...'})}\n\n"
+            merged_apk = merge_apks(base_apk, splits_data)
+
+            yield f"data: {json.dumps({'type': 'progress', 'step': 'sign', 'message': 'Signing APK...'})}\n\n"
+            signed_apk = sign_apk(merged_apk)
+
+            # Save to temp storage
+            file_id = str(uuid.uuid4())
+            TEMP_APKS[file_id] = {
+                'data': signed_apk,
+                'filename': f"{pkg}-{info['versionCode']}-merged.apk",
+                'created': time.time()
+            }
+
+            yield f"data: {json.dumps({'type': 'success', 'download_id': file_id, 'filename': TEMP_APKS[file_id]['filename']})}\n\n"
+
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return Response(
+        generate(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
+        }
+    )
+
+
+@app.route('/api/download-temp/<file_id>')
+def download_temp(file_id):
+    """Download a temporary merged APK."""
+    if file_id not in TEMP_APKS:
+        return jsonify({'error': 'File not found or expired'}), 404
+
+    apk_data = TEMP_APKS[file_id]
+    # Clean up after download
+    del TEMP_APKS[file_id]
+
+    return Response(
+        apk_data['data'],
+        content_type='application/vnd.android.package-archive',
+        headers={'Content-Disposition': f'attachment; filename="{apk_data["filename"]}"'}
+    )
+
+
+@app.route('/api/download-merged/<path:pkg>')
+def download_merged(pkg):
+    """Download and merge all APKs into a single installable APK (non-streaming fallback)."""
+    import time
+
+    # Get architecture from query parameter
+    arch = request.args.get('arch', 'arm64-v8a')
+    if arch not in SUPPORTED_ARCHS:
+        arch = 'arm64-v8a'
+    device_config = get_device_config(arch)
+
+    # Try to get a working token and download info
+    auth_data = None
+    info = None
+
+    # First try cached token
+    cached = get_cached_auth()
+    if cached:
+        try:
+            info = get_download_info(pkg, cached)
+            if 'error' not in info:
+                auth_data = cached
+        except:
+            pass
+
+    # If cached didn't work, try new tokens
+    if not auth_data:
+        for attempt in range(100):  # Limit attempts for non-streaming endpoint
+            try:
+                scraper = cloudscraper.create_scraper()
+                response = scraper.post(
+                    DISPENSER_URL,
+                    headers={
+                        'User-Agent': 'com.aurora.store-4.6.1-70',
+                        'Content-Type': 'application/json',
+                    },
+                    json=device_config,
+                    timeout=30
+                )
+
+                if not response.ok:
+                    time.sleep(1)
+                    continue
+
+                auth_data = response.json()
+                info = get_download_info(pkg, auth_data)
+
+                if 'error' not in info:
+                    save_cached_auth(auth_data)
+                    break
+                else:
+                    auth_data = None
+                    time.sleep(0.5)
+
+            except Exception as e:
+                logger.warning(f"Merge download attempt {attempt} failed: {e}")
+                time.sleep(0.5)
+
+    if not info or 'error' in info:
+        return jsonify({'error': 'Failed to get download info after multiple attempts'}), 500
+
+    # Build cookie header for downloads
+    cookie_header = '; '.join([f"{c['name']}={c['value']}" for c in info.get('cookies', [])])
+    headers = {'Cookie': cookie_header} if cookie_header else {}
+
+    try:
+        # Download base APK
+        logger.info(f"Downloading base APK for {pkg}")
+        base_resp = requests.get(info['downloadUrl'], headers=headers, timeout=120)
+        if not base_resp.ok:
+            return jsonify({'error': f'Failed to download base APK: {base_resp.status_code}'}), 500
+        base_apk = base_resp.content
+
+        # If no splits, just return base APK
+        if not info['splits']:
+            return Response(
+                base_apk,
+                content_type='application/vnd.android.package-archive',
+                headers={'Content-Disposition': f'attachment; filename="{info["filename"]}"'}
+            )
+
+        # Download all splits
+        splits_data = []
+        for split in info['splits']:
+            logger.info(f"Downloading split: {split['name']}")
+            split_resp = requests.get(split['downloadUrl'], headers=headers, timeout=120)
+            if not split_resp.ok:
+                return jsonify({'error': f'Failed to download split {split["name"]}: {split_resp.status_code}'}), 500
+            splits_data.append((split['name'], split_resp.content))
+
+        # Merge APKs
+        logger.info(f"Merging {len(splits_data) + 1} APKs")
+        merged_apk = merge_apks(base_apk, splits_data)
+
+        # Sign the merged APK
+        logger.info("Signing merged APK")
+        signed_apk = sign_apk(merged_apk)
+
+        merged_filename = f"{pkg}-{info['versionCode']}-merged.apk"
+        return Response(
+            signed_apk,
+            content_type='application/vnd.android.package-archive',
+            headers={'Content-Disposition': f'attachment; filename="{merged_filename}"'}
+        )
+
+    except Exception as e:
+        logger.error(f"Merge download failed: {e}")
         return jsonify({'error': str(e)}), 500
 
 

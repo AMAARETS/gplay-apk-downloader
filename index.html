@@ -65,6 +65,18 @@
     <div class="card">
       <h2>Direct Download</h2>
       <input type="text" id="pkg-input" placeholder="com.example.app">
+      <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+        <select id="arch-select" style="padding:10px;border-radius:8px;background:#0f3460;color:#fff;border:2px solid #0f3460;flex:1;min-width:150px">
+          <option value="arm64-v8a">ARM64 (modern phones)</option>
+          <option value="armeabi-v7a">ARM32 (older phones)</option>
+          <option value="x86_64">x86_64 (emulators)</option>
+          <option value="x86">x86 (old emulators)</option>
+        </select>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="checkbox" id="merge-apks" checked style="width:18px;height:18px">
+          <span>Merge to single APK</span>
+        </label>
+      </div>
       <div class="btn-row">
         <button class="sec" onclick="getInfo()">Get Info</button>
         <button onclick="download()">Download</button>
@@ -133,10 +145,13 @@
 
     async function dl(pkg) {
       const el = $('#info-result');
+      const arch = $('#arch-select').value;
+      const shouldMerge = $('#merge-apks').checked;
+
       el.innerHTML = '<div class="loading"><span class="spin"></span>Preparing...<br><button class="sec" onclick="stopDownload()" style="margin-top:10px">Stop</button></div>';
 
-      // Use streaming endpoint that tries unlimited tokens
-      downloadEventSource = new EventSource('/api/download-info-stream/' + encodeURIComponent(pkg));
+      // Use streaming endpoint that tries unlimited tokens, with arch parameter
+      downloadEventSource = new EventSource('/api/download-info-stream/' + encodeURIComponent(pkg) + '?arch=' + arch);
 
       downloadEventSource.onmessage = function(event) {
         const d = JSON.parse(event.data);
@@ -149,7 +164,7 @@
           downloadEventSource.close();
           downloadEventSource = null;
 
-          currentDownloadInfo = { pkg, ...d };
+          currentDownloadInfo = { pkg, arch, ...d };
           const hasSplits = d.splits?.length > 0;
           const totalFiles = 1 + (d.splits?.length || 0);
 
@@ -161,7 +176,11 @@
           html += '</div>';
 
           html += '<div class="app-item"><div class="app-info">';
-          if (hasSplits) {
+
+          if (hasSplits && shouldMerge) {
+            html += '<h3>Download Merged APK</h3>';
+            html += '<div class="pkg">Single installable APK (merged from ' + totalFiles + ' files)</div>';
+          } else if (hasSplits) {
             html += '<h3>Download All (' + totalFiles + ' APKs as ZIP)</h3>';
             html += '<div class="pkg">Includes base APK and all splits</div>';
           } else {
@@ -170,8 +189,10 @@
           }
           html += '</div><div class="app-actions">';
 
-          if (hasSplits) {
-            html += '<button onclick="downloadAll()">Download All</button>';
+          if (hasSplits && shouldMerge) {
+            html += '<button onclick="downloadMerged(\'' + pkg + '\', \'' + arch + '\')">Download Merged APK</button>';
+          } else if (hasSplits) {
+            html += '<button onclick="downloadAll()">Download ZIP</button>';
           } else {
             html += '<a href="' + d.downloadUrl + '" download="' + d.filename + '"><button>Download Direct</button></a>';
             html += '<a href="/download/' + encodeURIComponent(pkg) + '"><button class="sec">Via Server</button></a>';
@@ -187,6 +208,38 @@
         downloadEventSource.close();
         downloadEventSource = null;
         el.innerHTML = '<div class="msg err">Connection error. Please try again.</div>';
+      };
+    }
+
+    function downloadMerged(pkg, arch) {
+      const progressEl = $('#download-progress');
+      progressEl.innerHTML = '<div class="msg info"><span class="spin"></span>Starting merge process...</div>';
+
+      const es = new EventSource('/api/download-merged-stream/' + encodeURIComponent(pkg) + '?arch=' + arch);
+
+      es.onmessage = function(event) {
+        const d = JSON.parse(event.data);
+
+        if (d.type === 'progress') {
+          let pct = '';
+          if (d.current && d.total) {
+            pct = '<div class="progress" style="margin-top:8px"><div class="progress-bar" style="width:' + Math.round((d.current/d.total)*100) + '%"></div></div>';
+          }
+          progressEl.innerHTML = '<div class="msg info"><span class="spin"></span>' + d.message + pct + '</div>';
+        } else if (d.type === 'success') {
+          es.close();
+          progressEl.innerHTML = '<div class="msg ok">Merge complete! Starting download...</div>';
+          // Trigger download
+          window.location.href = '/api/download-temp/' + d.download_id;
+        } else if (d.type === 'error') {
+          es.close();
+          progressEl.innerHTML = '<div class="msg err">Error: ' + d.message + '</div>';
+        }
+      };
+
+      es.onerror = function() {
+        es.close();
+        progressEl.innerHTML = '<div class="msg err">Connection error. Please try again.</div>';
       };
     }
 
