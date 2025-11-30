@@ -319,50 +319,84 @@ def auth():
         logger.info("Using existing valid cached token (passed Chase test)")
         return jsonify({'success': True, 'authData': cached, 'cached': True})
 
-    # Need to get a new token from dispenser
-    # Note: AuroraOSS dispenser tokens often don't work for stricter apps like Chase
-    # We'll try multiple times but may need a token from CLI auth instead
-    logger.info("Getting new token from dispenser...")
-    max_retries = 5  # Try more times since many tokens fail strict validation
-
-    for attempt in range(max_retries):
-        try:
-            scraper = cloudscraper.create_scraper()
-            response = scraper.post(
-                DISPENSER_URL,
-                headers={
-                    'User-Agent': 'com.aurora.store-4.6.1-70',
-                    'Content-Type': 'application/json',
-                },
-                json=DEFAULT_DEVICE,
-                timeout=30
-            )
-
-            if not response.ok:
-                logger.warning(f"Dispenser returned {response.status_code}, attempt {attempt+1}/{max_retries}")
-                continue
-
-            auth_data = response.json()
-
-            # Test with strict validation (Chase) - this ensures token works for all apps
-            if test_auth_token(auth_data, strict=True):
-                # Save the working token
-                save_cached_auth(auth_data)
-                logger.info("New token validated with Chase and saved")
-                return jsonify({'success': True, 'authData': auth_data, 'cached': False})
-            else:
-                logger.warning(f"Token failed Chase validation, attempt {attempt+1}/{max_retries}")
-
-        except Exception as e:
-            logger.warning(f"Auth attempt {attempt+1} failed: {e}")
-
     # If we have a cached token that at least works for simple apps, use it
     # but warn that some apps may not work
     if cached and test_auth_token(cached, strict=False):
-        logger.warning("No token passed Chase test, using cached token (may have limited functionality)")
+        logger.warning("Cached token works for simple apps (may have limited functionality)")
         return jsonify({'success': True, 'authData': cached, 'cached': True, 'warning': 'Token may not work for all apps'})
 
-    return jsonify({'error': 'Failed to get valid auth token. Try running CLI auth first: ./gplay-downloader.py auth'}), 500
+    return jsonify({'error': 'No valid cached token. Use the streaming auth endpoint.'}), 400
+
+
+@app.route('/api/auth/stream', methods=['GET'])
+def auth_stream():
+    """SSE endpoint that tries unlimited tokens and streams progress to the frontend."""
+    def generate():
+        import time
+
+        # First check if we have a valid cached token
+        cached = get_cached_auth()
+        if cached and test_auth_token(cached, strict=True):
+            logger.info("Using existing valid cached token (passed Chase test)")
+            yield f"data: {json.dumps({'type': 'success', 'authData': cached, 'cached': True, 'attempt': 0})}\n\n"
+            return
+
+        attempt = 0
+        while True:
+            attempt += 1
+
+            # Send progress update
+            yield f"data: {json.dumps({'type': 'progress', 'attempt': attempt, 'message': f'Trying token #{attempt}...'})}\n\n"
+
+            try:
+                scraper = cloudscraper.create_scraper()
+                response = scraper.post(
+                    DISPENSER_URL,
+                    headers={
+                        'User-Agent': 'com.aurora.store-4.6.1-70',
+                        'Content-Type': 'application/json',
+                    },
+                    json=DEFAULT_DEVICE,
+                    timeout=30
+                )
+
+                if not response.ok:
+                    logger.warning(f"Dispenser returned {response.status_code}, attempt {attempt}")
+                    yield f"data: {json.dumps({'type': 'progress', 'attempt': attempt, 'message': f'Token #{attempt} - dispenser error ({response.status_code})'})}\n\n"
+                    time.sleep(1)  # Brief delay before retry
+                    continue
+
+                auth_data = response.json()
+
+                # Send validation progress
+                yield f"data: {json.dumps({'type': 'progress', 'attempt': attempt, 'message': f'Token #{attempt} - validating...'})}\n\n"
+
+                # Test with strict validation (Chase) - this ensures token works for all apps
+                if test_auth_token(auth_data, strict=True):
+                    # Save the working token
+                    save_cached_auth(auth_data)
+                    logger.info(f"Token #{attempt} validated with Chase and saved")
+                    yield f"data: {json.dumps({'type': 'success', 'authData': auth_data, 'cached': False, 'attempt': attempt})}\n\n"
+                    return
+                else:
+                    logger.warning(f"Token #{attempt} failed Chase validation")
+                    yield f"data: {json.dumps({'type': 'progress', 'attempt': attempt, 'message': f'Token #{attempt} - failed validation, retrying...'})}\n\n"
+
+            except Exception as e:
+                logger.warning(f"Auth attempt {attempt} failed: {e}")
+                yield f"data: {json.dumps({'type': 'progress', 'attempt': attempt, 'message': f'Token #{attempt} - error: {str(e)[:50]}'})}\n\n"
+
+            time.sleep(0.5)  # Brief delay between attempts
+
+    return Response(
+        generate(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',  # Disable nginx buffering
+        }
+    )
 
 
 @app.route('/api/auth/status')
@@ -454,6 +488,92 @@ def download_info(pkg):
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/download-info-stream/<path:pkg>')
+def download_info_stream(pkg):
+    """SSE endpoint that tries unlimited tokens until download URL is obtained."""
+    import time
+
+    def generate():
+        attempt = 0
+
+        while True:
+            attempt += 1
+
+            yield f"data: {json.dumps({'type': 'progress', 'attempt': attempt, 'message': f'Trying token #{attempt}...'})}\n\n"
+
+            try:
+                # Get a fresh token from dispenser
+                scraper = cloudscraper.create_scraper()
+                response = scraper.post(
+                    DISPENSER_URL,
+                    headers={
+                        'User-Agent': 'com.aurora.store-4.6.1-70',
+                        'Content-Type': 'application/json',
+                    },
+                    json=DEFAULT_DEVICE,
+                    timeout=30
+                )
+
+                if not response.ok:
+                    logger.warning(f"Dispenser returned {response.status_code}, attempt {attempt}")
+                    yield f"data: {json.dumps({'type': 'progress', 'attempt': attempt, 'message': f'Token #{attempt} - dispenser error ({response.status_code})'})}\n\n"
+                    time.sleep(1)
+                    continue
+
+                auth_data = response.json()
+
+                yield f"data: {json.dumps({'type': 'progress', 'attempt': attempt, 'message': f'Token #{attempt} - getting download info...'})}\n\n"
+
+                # Try to get download info with this token
+                info = get_download_info(pkg, auth_data)
+
+                if 'error' in info:
+                    error_msg = info['error'][:50]
+                    logger.warning(f"Token #{attempt} failed for {pkg}: {info['error']}")
+                    yield f"data: {json.dumps({'type': 'progress', 'attempt': attempt, 'message': f'Token #{attempt} - {error_msg}'})}\n\n"
+                    time.sleep(0.5)
+                    continue
+
+                # Success! Save the working token and return info
+                save_cached_auth(auth_data)
+                logger.info(f"Token #{attempt} worked for {pkg}")
+
+                result = {
+                    'type': 'success',
+                    'attempt': attempt,
+                    'filename': info['filename'],
+                    'title': info['title'],
+                    'version': info['versionString'],
+                    'versionCode': info['versionCode'],
+                    'size': format_size(info['downloadSize']),
+                    'downloadUrl': info['downloadUrl'],
+                    'cookies': info['cookies'],
+                    'splits': [{
+                        'filename': f"{pkg}-{info['versionCode']}-{s['name']}.apk",
+                        'name': s['name'],
+                        'downloadUrl': s['downloadUrl']
+                    } for s in info['splits']]
+                }
+                yield f"data: {json.dumps(result)}\n\n"
+                return
+
+            except Exception as e:
+                logger.warning(f"Download info attempt {attempt} failed: {e}")
+                yield f"data: {json.dumps({'type': 'progress', 'attempt': attempt, 'message': f'Token #{attempt} - error: {str(e)[:50]}'})}\n\n"
+
+            time.sleep(0.5)
+
+    return Response(
+        generate(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
+        }
+    )
 
 
 @app.route('/download/<path:pkg>')

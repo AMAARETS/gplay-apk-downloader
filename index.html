@@ -63,14 +63,6 @@
   <div class="container">
     <h1>GPlay Downloader</h1>
     <div class="card">
-      <h2>Authentication</h2>
-      <div id="auth-status"><span class="status err">Checking...</span></div>
-      <div class="btn-row" style="margin-top:16px">
-        <button id="auth-btn" onclick="auth()">Authenticate</button>
-        <button class="sec" onclick="clearAuth()">Clear</button>
-      </div>
-    </div>
-    <div class="card">
       <h2>Direct Download</h2>
       <input type="text" id="pkg-input" placeholder="com.example.app">
       <div class="btn-row">
@@ -88,66 +80,6 @@
   </div>
   <script>
     const $ = s => document.querySelector(s);
-    const AUTH_KEY = 'gplay-auth';
-
-    // Get auth from localStorage
-    function getAuth() {
-      try {
-        const data = localStorage.getItem(AUTH_KEY);
-        return data ? JSON.parse(data) : null;
-      } catch { return null; }
-    }
-
-    // Save auth to localStorage
-    function saveAuth(data) {
-      localStorage.setItem(AUTH_KEY, JSON.stringify(data));
-    }
-
-    // Clear auth
-    function clearAuth() {
-      localStorage.removeItem(AUTH_KEY);
-      checkAuth();
-    }
-
-    // Get auth header for API calls
-    function getAuthHeader() {
-      const auth = getAuth();
-      if (auth) {
-        return { 'Authorization': 'Bearer ' + btoa(JSON.stringify(auth)) };
-      }
-      return {};
-    }
-
-    // API call with auth
-    async function api(path, opts = {}) {
-      const headers = { ...getAuthHeader(), ...(opts.headers || {}) };
-      const response = await fetch(path, { ...opts, headers });
-      return response.json();
-    }
-
-    async function checkAuth() {
-      const auth = getAuth();
-      if (auth?.authToken) {
-        $('#auth-status').innerHTML = '<span class="status ok">Authenticated</span>';
-      } else {
-        $('#auth-status').innerHTML = '<span class="status err">Not authenticated</span>';
-      }
-    }
-
-    async function auth() {
-      const btn = $('#auth-btn');
-      btn.disabled = true; btn.innerHTML = '<span class="spin"></span>...';
-      try {
-        const d = await fetch('/api/auth', {method:'POST'}).then(r=>r.json());
-        if (d.error) {
-          alert(d.error);
-        } else if (d.authData) {
-          saveAuth(d.authData);
-          checkAuth();
-        }
-      } catch(e) { alert(e); }
-      btn.disabled = false; btn.textContent = 'Authenticate';
-    }
 
     async function search() {
       const q = $('#search-q').value.trim();
@@ -155,7 +87,7 @@
       const el = $('#search-results');
       el.innerHTML = '<div class="loading"><span class="spin"></span>Searching...</div>';
       try {
-        const d = await api('/api/search?q=' + encodeURIComponent(q));
+        const d = await fetch('/api/search?q=' + encodeURIComponent(q)).then(r => r.json());
         if (d.error) { el.innerHTML = '<div class="msg err">' + d.error + '</div>'; return; }
         if (!d.results?.length) { el.innerHTML = '<div class="msg info">No results</div>'; return; }
         el.innerHTML = d.results.map(a =>
@@ -174,7 +106,7 @@
       const el = $('#info-result');
       el.innerHTML = '<div class="loading"><span class="spin"></span>Getting info...</div>';
       try {
-        const d = await api('/api/info/' + encodeURIComponent(pkg));
+        const d = await fetch('/api/info/' + encodeURIComponent(pkg)).then(r => r.json());
         if (d.error) { el.innerHTML = '<div class="msg err">' + d.error + '</div>'; return; }
         el.innerHTML = '<div class="app-item"><div class="app-info"><h3>' + d.title + '</h3><div class="pkg">' + d.package + '</div><div class="pkg">by ' + d.developer + '</div></div><div class="app-actions"><button onclick="dl(\'' + d.package + '\')">Download</button></div></div>';
       } catch(e) { el.innerHTML = '<div class="msg err">' + e + '</div>'; }
@@ -189,46 +121,73 @@
     // Store current download info for Download All
     let currentDownloadInfo = null;
 
+    let downloadEventSource = null;
+
+    function stopDownload() {
+      if (downloadEventSource) {
+        downloadEventSource.close();
+        downloadEventSource = null;
+      }
+      $('#info-result').innerHTML = '<div class="msg info">Download cancelled</div>';
+    }
+
     async function dl(pkg) {
       const el = $('#info-result');
-      el.innerHTML = '<div class="loading"><span class="spin"></span>Preparing...</div>';
-      try {
-        const d = await api('/api/download-info/' + encodeURIComponent(pkg));
-        if (d.error) { el.innerHTML = '<div class="msg err">' + d.error + (d.debug ? '<br><small>' + JSON.stringify(d.debug) + '</small>' : '') + '</div>'; return; }
+      el.innerHTML = '<div class="loading"><span class="spin"></span>Preparing...<br><button class="sec" onclick="stopDownload()" style="margin-top:10px">Stop</button></div>';
 
-        currentDownloadInfo = { pkg, ...d };
-        const hasSplits = d.splits?.length > 0;
-        const totalFiles = 1 + (d.splits?.length || 0);
+      // Use streaming endpoint that tries unlimited tokens
+      downloadEventSource = new EventSource('/api/download-info-stream/' + encodeURIComponent(pkg));
 
-        let html = '<div class="msg ok"><strong>' + d.title + '</strong><br>Version: ' + d.version + '<br>Size: ' + d.size;
-        if (hasSplits) {
-          html += '<br><strong>' + totalFiles + ' APK files</strong> (1 base + ' + d.splits.length + ' splits)';
+      downloadEventSource.onmessage = function(event) {
+        const d = JSON.parse(event.data);
+
+        if (d.type === 'progress') {
+          el.innerHTML = '<div class="msg info"><span class="spin"></span>' + d.message +
+            '<br><small>Attempt #' + d.attempt + ' (will keep trying until success)</small>' +
+            '<br><button class="sec" onclick="stopDownload()" style="margin-top:10px">Stop</button></div>';
+        } else if (d.type === 'success') {
+          downloadEventSource.close();
+          downloadEventSource = null;
+
+          currentDownloadInfo = { pkg, ...d };
+          const hasSplits = d.splits?.length > 0;
+          const totalFiles = 1 + (d.splits?.length || 0);
+
+          let html = '<div class="msg ok"><strong>' + d.title + '</strong><br>Version: ' + d.version + '<br>Size: ' + d.size;
+          html += '<br><small>Found working token after ' + d.attempt + ' attempts</small>';
+          if (hasSplits) {
+            html += '<br><strong>' + totalFiles + ' APK files</strong> (1 base + ' + d.splits.length + ' splits)';
+          }
+          html += '</div>';
+
+          html += '<div class="app-item"><div class="app-info">';
+          if (hasSplits) {
+            html += '<h3>Download All (' + totalFiles + ' APKs as ZIP)</h3>';
+            html += '<div class="pkg">Includes base APK and all splits</div>';
+          } else {
+            html += '<h3>Download APK</h3>';
+            html += '<div class="pkg">' + d.filename + '</div>';
+          }
+          html += '</div><div class="app-actions">';
+
+          if (hasSplits) {
+            html += '<button onclick="downloadAll()">Download All</button>';
+          } else {
+            html += '<a href="' + d.downloadUrl + '" download="' + d.filename + '"><button>Download Direct</button></a>';
+            html += '<a href="/download/' + encodeURIComponent(pkg) + '"><button class="sec">Via Server</button></a>';
+          }
+          html += '</div></div>';
+
+          html += '<div id="download-progress"></div>';
+          el.innerHTML = html;
         }
-        html += '</div>';
+      };
 
-        html += '<div class="app-item"><div class="app-info">';
-        if (hasSplits) {
-          html += '<h3>Download All (' + totalFiles + ' APKs as ZIP)</h3>';
-          html += '<div class="pkg">Includes base APK and all splits</div>';
-        } else {
-          html += '<h3>Download APK</h3>';
-          html += '<div class="pkg">' + d.filename + '</div>';
-        }
-        html += '</div><div class="app-actions">';
-
-        if (hasSplits) {
-          html += '<button onclick="downloadAll()">Download All</button>';
-        } else {
-          // Try direct download first (browser redirect)
-          html += '<a href="' + d.downloadUrl + '" download="' + d.filename + '"><button>Download Direct</button></a>';
-          // Fallback to proxy download
-          html += '<a href="/download/' + encodeURIComponent(pkg) + '"><button class="sec">Via Server</button></a>';
-        }
-        html += '</div></div>';
-
-        html += '<div id="download-progress"></div>';
-        el.innerHTML = html;
-      } catch(e) { el.innerHTML = '<div class="msg err">' + e + '</div>'; }
+      downloadEventSource.onerror = function(e) {
+        downloadEventSource.close();
+        downloadEventSource = null;
+        el.innerHTML = '<div class="msg err">Connection error. Please try again.</div>';
+      };
     }
 
     async function downloadAll() {
@@ -253,8 +212,7 @@
             console.log('Direct download failed, using proxy:', e);
           }
           // Fall back to proxy
-          const authHeaders = getAuthHeader();
-          const resp = await fetch(proxyUrl, { headers: authHeaders });
+          const resp = await fetch(proxyUrl);
           if (!resp.ok) throw new Error('Download failed');
           return resp.blob();
         }
@@ -304,7 +262,6 @@
       if (barEl) barEl.style.width = pct + '%';
     }
 
-    checkAuth();
   </script>
 </body>
 </html>
