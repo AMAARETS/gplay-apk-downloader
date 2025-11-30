@@ -125,6 +125,14 @@ fi
 source "$SCRIPT_DIR/.venv/bin/activate"
 cd "$SCRIPT_DIR"
 
+# Delete log if older than 12 hours
+if [ -f server.log ]; then
+    if [ $(find server.log -mmin +720 2>/dev/null | wc -l) -gt 0 ]; then
+        echo "Rotating old log file..."
+        rm -f server.log
+    fi
+fi
+
 echo "Starting server in background..."
 nohup python3 server.py > server.log 2>&1 &
 disown
