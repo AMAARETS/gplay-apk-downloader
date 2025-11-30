@@ -121,14 +121,23 @@ Token is saved to `~/.gplay-auth.json` and shared between CLI and web server.
 #### Download APK
 
 ```bash
-# Basic download (ARM64, no merge)
+# Basic download (ARM64 is default)
 ./gplay download com.google.android.youtube
 
-# Download for older phones
+# Explicit ARM64 (modern phones)
+./gplay download com.google.android.youtube -a arm64
+
+# ARMv7 (older phones)
 ./gplay download com.google.android.youtube -a armv7
 
 # Download and merge splits into single APK
 ./gplay download com.google.android.youtube -m
+
+# ARM64 merged
+./gplay download com.google.android.youtube -m -a arm64
+
+# ARMv7 merged
+./gplay download com.google.android.youtube -m -a armv7
 
 # Full example: merge, armv7, custom output dir
 ./gplay download com.google.android.youtube -m -a armv7 -o ~/apks/
@@ -146,18 +155,24 @@ Token is saved to `~/.gplay-auth.json` and shared between CLI and web server.
 ### Examples
 
 ```bash
-# Download YouTube, merge splits, ARM64
+# Download YouTube, merge splits, ARM64 (default)
 ./gplay download com.google.android.youtube -m
 
-# Download Instagram for older phone
-./gplay download com.instagram.android -a armv7 -m
+# Download YouTube, merge splits, explicit ARM64
+./gplay download com.google.android.youtube -m -a arm64
+
+# Download Instagram for older phone (ARMv7)
+./gplay download com.instagram.android -m -a armv7
 
 # Download to specific folder
 ./gplay download com.whatsapp -m -o ~/Downloads/
 
+# Download without merge (keeps splits separate)
+./gplay download com.google.android.youtube -a arm64
+
 # Search and download
 ./gplay search "spotify"
-./gplay download com.spotify.music -m
+./gplay download com.spotify.music -m -a arm64
 ```
 
 ---
