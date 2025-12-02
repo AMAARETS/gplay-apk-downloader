@@ -67,6 +67,7 @@ def create_scraper_no_verify():
 # Default dispenser URLs for anonymous authentication
 DISPENSER_URLS = [
     "https://auroraoss.com/api/auth",
+    "https://nightly.auroraoss.com/api/auth",
 ]
 
 # Google Play API endpoints
@@ -202,25 +203,31 @@ def format_size(size_bytes):
 
 def get_dispenser_auth(dispenser_url=None):
     """Get anonymous authentication from dispenser."""
-    url = dispenser_url or DISPENSER_URLS[0]
-    print(f"Authenticating via dispenser: {url}")
+    urls = [dispenser_url] if dispenser_url else DISPENSER_URLS
+    
+    for url in urls:
+        print(f"Authenticating via dispenser: {url}")
 
-    # Use cloudscraper to bypass Cloudflare protection
-    scraper = create_scraper_no_verify()
+        # Use cloudscraper to bypass Cloudflare protection
+        scraper = create_scraper_no_verify()
 
-    headers = {
-        'User-Agent': 'com.aurora.store-4.6.1-70',
-        'Content-Type': 'application/json',
-    }
+        headers = {
+            'User-Agent': 'com.aurora.store-4.6.1-70',
+            'Content-Type': 'application/json',
+        }
 
-    try:
-        response = scraper.post(url, json=DEFAULT_DEVICE, headers=headers, timeout=30)
-        response.raise_for_status()
-        data = response.json()
-        return data
-    except Exception as e:
-        print(f"Error: Failed to authenticate: {e}")
-        return None
+        try:
+            response = scraper.post(url, json=DEFAULT_DEVICE, headers=headers, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            return data
+        except Exception as e:
+            print(f"Error: Failed to authenticate with {url}: {e}")
+            if url != urls[-1]:
+                print("Trying next dispenser...")
+                continue
+    
+    return None
 
 
 def save_auth(auth_data):
@@ -278,6 +285,27 @@ def api_request(auth, url, params=None, method='GET'):
         return None
 
 
+def test_auth_token(auth):
+    """Test if an auth token works by making a simple API request."""
+    try:
+        headers = get_auth_headers(auth)
+        headers['Accept'] = 'application/x-protobuf'
+        
+        # Test with a common app
+        test_app = 'com.google.android.youtube'
+        resp = requests.get(f'{DETAILS_URL}?doc={test_app}', headers=headers, timeout=10)
+        
+        if resp.status_code == 200:
+            print(f"✓ Token validated successfully")
+            return True
+        else:
+            print(f"✗ Token validation failed: status={resp.status_code}")
+            return False
+    except Exception as e:
+        print(f"✗ Token validation error: {e}")
+        return False
+
+
 def cmd_auth(args):
     """Authenticate with Google Play."""
     auth_data = get_dispenser_auth(args.dispenser)
@@ -288,6 +316,12 @@ def cmd_auth(args):
 
     email = auth_data.get('email', 'unknown')
     print(f"Got auth token for: {email}")
+    
+    # Validate the token
+    print("Validating token...")
+    if not test_auth_token(auth_data):
+        print("Token validation failed!")
+        return 1
 
     save_auth(auth_data)
     print("Authentication successful!")

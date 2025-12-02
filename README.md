@@ -14,6 +14,33 @@ Download APKs from Google Play Store. Automatically merges split APKs (App Bundl
 
 ---
 
+## GitHub Actions
+
+### הורדה אוטומטית עם GitHub Actions
+
+הפרויקט כולל GitHub Action שמאפשר להוריד APK ישירות דרך GitHub ולשמור אותם כגרסאות (Releases).
+
+#### איך להשתמש:
+
+1. עבור ל-**Actions** בגיטהאב
+2. בחר **"Download APK from Google Play"**
+3. לחץ **"Run workflow"**
+4. הזן את הפרמטרים:
+   - **Package name**: שם החבילה (למשל `com.whatsapp`)
+   - **Architecture**: `arm64` (מכשירים חדשים) או `armv7` (מכשירים ישנים)
+   - **Merge splits**: האם למזג split APKs לקובץ אחד
+   - **Release tag**: תג אופציונלי (אם ריק, יוצר אוטומטית)
+
+5. ה-APK יופיע ב-**Releases** של המאגר
+
+#### תכונות:
+- ✅ ניסיונות חוזרים אוטומטיים עד קבלת טוקן תקין
+- ✅ מטמון לתלויות (Python, Java, APKEditor)
+- ✅ יצירת Release אוטומטית עם מידע על האפליקציה
+- ✅ תג גרסה אוטומטי בפורמט: `{app}-{arch}-v{version}-{timestamp}`
+
+---
+
 ## Installation
 
 ### Prerequisites
