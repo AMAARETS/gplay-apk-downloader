@@ -24,6 +24,11 @@ on:
         description: 'Release tag (leave empty for auto-generated)'
         required: false
         type: string
+      use_proxy:
+        description: 'Try using proxy to bypass dispenser blocks'
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   download-and-release:
@@ -84,7 +89,35 @@ jobs:
             -storepass android -keypass android \
             -dname "CN=Android Debug,O=Android,C=US"
 
+      - name: Setup proxy (if enabled)
+        if: inputs.use_proxy == true
+        run: |
+          # Install proxy tools
+          sudo apt-get install -y tor privoxy
+          
+          # Start Tor
+          sudo systemctl start tor
+          sleep 5
+          
+          # Configure environment to use Tor SOCKS proxy
+          echo "Using Tor proxy for authentication..."
+          echo "HTTPS_PROXY=socks5h://127.0.0.1:9050" >> $GITHUB_ENV
+          echo "HTTP_PROXY=socks5h://127.0.0.1:9050" >> $GITHUB_ENV
+
+      - name: Check for manual auth token
+        id: check_auth
+        run: |
+          # Check if GPLAY_AUTH_TOKEN secret exists and use it
+          if [ -n "${{ secrets.GPLAY_AUTH_TOKEN }}" ]; then
+            echo "Using manual auth token from secrets..."
+            echo '${{ secrets.GPLAY_AUTH_TOKEN }}' > ~/.gplay-auth.json
+            echo "has_token=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_token=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Authenticate with Google Play
+        if: steps.check_auth.outputs.has_token != 'true'
         run: |
           echo "Attempting to get valid auth token (may take multiple tries)..."
           python gplay-downloader.py auth --max-attempts 50

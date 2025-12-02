@@ -33,11 +33,20 @@ Download APKs from Google Play Store. Automatically merges split APKs (App Bundl
 
 5. ה-APK יופיע ב-**Releases** של המאגר
 
-#### תכונות:
-- ✅ ניסיונות חוזרים אוטומטיים עד קבלת טוקן תקין
-- ✅ מטמון לתלויות (Python, Java, APKEditor)
-- ✅ יצירת Release אוטומטית עם מידע על האפליקציה
-- ✅ תג גרסה אוטומטי בפורמט: `{app}-{arch}-v{version}-{timestamp}`
+#### Features:
+- ✅ Automatic retry attempts until valid token obtained
+- ✅ Dependency caching (Python, Java, APKEditor)
+- ✅ Automatic Release creation with app info
+- ✅ Auto-generated version tag: `{app}-{arch}-v{version}-{timestamp}`
+- ✅ Token validation before use
+- ✅ Manual token support (if GitHub is blocked)
+- ✅ Optional Tor proxy support
+
+#### Initial Setup
+
+If GitHub Actions is blocked by the dispenser (403 error), see [Setup Guide](GITHUB_ACTIONS_SETUP.md) for solutions.
+
+**Quick fix:** Run `./gplay auth` locally and add the token as a Secret named `GPLAY_AUTH_TOKEN`.
 
 ---
 

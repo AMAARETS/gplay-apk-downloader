@@ -206,6 +206,17 @@ def get_dispenser_auth(dispenser_url=None):
     """Get anonymous authentication from dispenser."""
     urls = [dispenser_url] if dispenser_url else DISPENSER_URLS
     
+    # Check for proxy environment variables
+    proxies = {}
+    if os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY'):
+        https_proxy = os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY')
+        http_proxy = os.environ.get('HTTP_PROXY') or os.environ.get('HTTPS_PROXY')
+        proxies = {
+            'http': http_proxy,
+            'https': https_proxy,
+        }
+        print(f"Using proxy: {https_proxy}")
+    
     for url in urls:
         print(f"Authenticating via dispenser: {url}")
 
@@ -218,7 +229,8 @@ def get_dispenser_auth(dispenser_url=None):
         }
 
         try:
-            response = scraper.post(url, json=DEFAULT_DEVICE, headers=headers, timeout=30)
+            response = scraper.post(url, json=DEFAULT_DEVICE, headers=headers, 
+                                   timeout=30, proxies=proxies if proxies else None)
             response.raise_for_status()
             data = response.json()
             return data
