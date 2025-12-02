@@ -106,11 +106,13 @@ jobs:
 
       - name: Check for manual auth token
         id: check_auth
+        env:
+          AUTH_TOKEN: ${{ secrets.GPLAY_AUTH_TOKEN }}
         run: |
           # Check if GPLAY_AUTH_TOKEN secret exists and use it
-          if [ -n "${{ secrets.GPLAY_AUTH_TOKEN }}" ]; then
+          if [ -n "$AUTH_TOKEN" ]; then
             echo "Using manual auth token from secrets..."
-            echo '${{ secrets.GPLAY_AUTH_TOKEN }}' > ~/.gplay-auth.json
+            echo "$AUTH_TOKEN" > ~/.gplay-auth.json
             echo "has_token=true" >> $GITHUB_OUTPUT
           else
             echo "has_token=false" >> $GITHUB_OUTPUT
