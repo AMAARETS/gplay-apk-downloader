@@ -25,6 +25,8 @@ import sys
 import subprocess
 import tempfile
 import shutil
+import time
+import random
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -67,7 +69,6 @@ def create_scraper_no_verify():
 # Default dispenser URLs for anonymous authentication
 DISPENSER_URLS = [
     "https://auroraoss.com/api/auth",
-    "https://nightly.auroraoss.com/api/auth",
 ]
 
 # Google Play API endpoints
@@ -308,24 +309,44 @@ def test_auth_token(auth):
 
 def cmd_auth(args):
     """Authenticate with Google Play."""
-    auth_data = get_dispenser_auth(args.dispenser)
-
-    if not auth_data:
-        print("Authentication failed!")
-        return 1
-
-    email = auth_data.get('email', 'unknown')
-    print(f"Got auth token for: {email}")
+    max_attempts = getattr(args, 'max_attempts', 1)
     
-    # Validate the token
-    print("Validating token...")
-    if not test_auth_token(auth_data):
-        print("Token validation failed!")
-        return 1
+    for attempt in range(1, max_attempts + 1):
+        if max_attempts > 1:
+            print(f"\n=== Attempt {attempt}/{max_attempts} ===")
+        
+        # Add random delay between attempts to avoid rate limiting
+        if attempt > 1:
+            delay = random.uniform(1, 3)
+            print(f"Waiting {delay:.1f}s before retry...")
+            time.sleep(delay)
+        
+        auth_data = get_dispenser_auth(args.dispenser)
 
-    save_auth(auth_data)
-    print("Authentication successful!")
-    return 0
+        if not auth_data:
+            if attempt < max_attempts:
+                print("Failed to get token, retrying...")
+                continue
+            print("Authentication failed!")
+            return 1
+
+        email = auth_data.get('email', 'unknown')
+        print(f"Got auth token for: {email}")
+        
+        # Validate the token
+        print("Validating token...")
+        if not test_auth_token(auth_data):
+            if attempt < max_attempts:
+                print("Token validation failed, retrying...")
+                continue
+            print("Token validation failed!")
+            return 1
+
+        save_auth(auth_data)
+        print(f"✓ Authentication successful on attempt {attempt}!")
+        return 0
+    
+    return 1
 
 
 def cmd_search(args):
@@ -651,6 +672,8 @@ Examples:
     # Auth command
     auth_parser = subparsers.add_parser('auth', help='Authenticate with Google Play')
     auth_parser.add_argument('-d', '--dispenser', help='Dispenser URL for anonymous auth')
+    auth_parser.add_argument('-r', '--max-attempts', type=int, default=1, 
+                            help='Maximum authentication attempts (default: 1)')
 
     # Search command
     search_parser = subparsers.add_parser('search', help='Search for apps')

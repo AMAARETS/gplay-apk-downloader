@@ -86,40 +86,8 @@ jobs:
 
       - name: Authenticate with Google Play
         run: |
-          MAX_ATTEMPTS=50
-          ATTEMPT=0
-          
           echo "Attempting to get valid auth token (may take multiple tries)..."
-          
-          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
-            ATTEMPT=$((ATTEMPT + 1))
-            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS..."
-            
-            if python gplay-downloader.py auth 2>&1 | tee /tmp/auth.log; then
-              # Check if auth file was created and is valid
-              if [ -f ~/.gplay-auth.json ]; then
-                echo "✓ Auth token obtained successfully on attempt $ATTEMPT"
-                break
-              fi
-            fi
-            
-            # Check if we got a 403 or other error
-            if grep -q "403" /tmp/auth.log || grep -q "Forbidden" /tmp/auth.log; then
-              echo "  Dispenser blocked request, retrying..."
-              sleep 2
-            elif grep -q "Authentication failed" /tmp/auth.log; then
-              echo "  Token validation failed, retrying..."
-              sleep 1
-            else
-              echo "  Unknown error, retrying..."
-              sleep 1
-            fi
-            
-            if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
-              echo "❌ Failed to authenticate after $MAX_ATTEMPTS attempts"
-              exit 1
-            fi
-          done
+          python gplay-downloader.py auth --max-attempts 50
 
       - name: Download APK
         id: download

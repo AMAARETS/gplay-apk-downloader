@@ -118,6 +118,12 @@ sudo apt-get install -y openjdk-17-jre-headless apksigner python3 python3-venv p
 ./gplay auth
 ```
 
+אם הטוקן לא עובד, נסה עם ניסיונות חוזרים:
+
+```bash
+./gplay auth --max-attempts 20
+```
+
 הטוקן נשמר ב-`~/.gplay-auth.json` ומשותף בין CLI לשרת.
 
 ### פקודות

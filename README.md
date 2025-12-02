@@ -128,6 +128,12 @@ Authenticate to get an anonymous token:
 ./gplay auth
 ```
 
+If token doesn't work, try with retry attempts:
+
+```bash
+./gplay auth --max-attempts 20
+```
+
 Token is saved to `~/.gplay-auth.json` and shared between CLI and web server.
 
 ### Commands
