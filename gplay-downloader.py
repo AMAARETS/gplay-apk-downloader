@@ -306,7 +306,7 @@ def test_auth_token(auth):
         
         # Test with a common app
         test_app = 'com.google.android.youtube'
-        resp = requests.get(f'{DETAILS_URL}?doc={test_app}', headers=headers, timeout=10)
+        resp = requests.get(f'{DETAILS_URL}?doc={test_app}', headers=headers, timeout=10, verify=False)
         
         if resp.status_code == 200:
             print(f"✓ Token validated successfully")
