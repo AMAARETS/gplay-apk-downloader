@@ -2,6 +2,16 @@
 
 Download APKs from Google Play Store. Automatically merges split APKs (App Bundles) into single installable APKs.
 
+## ⚠️ Important for Render.com Deployment
+
+If you're deploying to Render.com, you **must** set up an auth token as an environment variable:
+
+1. Run locally: `python gplay-downloader.py auth -r 50`
+2. Copy the content of `~/.gplay-auth.json`
+3. In Render Dashboard, add environment variable: `GPLAY_AUTH_TOKEN` with the file content
+
+**See [detailed deployment instructions](RENDER_DEPLOYMENT.md)**
+
 ## Features
 
 - Download any free app from Google Play

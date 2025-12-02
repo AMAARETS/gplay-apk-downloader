@@ -357,13 +357,25 @@ def format_size(bytes_size):
 
 def get_cached_auth(arch='arm64-v8a'):
     """Load cached auth from server-side auth file for specific architecture."""
+    # First try environment variable (for production deployment)
+    env_token = os.environ.get('GPLAY_AUTH_TOKEN')
+    if env_token:
+        try:
+            auth = json.loads(env_token)
+            if auth.get('authToken') and auth.get('gsfId'):
+                logger.info(f"Using auth token from environment variable for {arch}")
+                return auth
+        except Exception as e:
+            logger.warning(f"Failed to parse GPLAY_AUTH_TOKEN from environment: {e}")
+    
+    # Fall back to file-based cache
     cache_file = AUTH_CACHE_FILES.get(arch, AUTH_CACHE_FILES['arm64-v8a'])
     if cache_file.exists():
         try:
             with open(cache_file) as f:
                 auth = json.load(f)
             if auth.get('authToken') and auth.get('gsfId'):
-                logger.info(f"Using cached auth token for {arch}")
+                logger.info(f"Using cached auth token from file for {arch}")
                 return auth
         except Exception as e:
             logger.warning(f"Failed to load cached auth for {arch}: {e}")

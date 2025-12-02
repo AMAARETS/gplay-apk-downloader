@@ -2,6 +2,16 @@
 
 הורדת APK מ-Google Play Store. מיזוג אוטומטי של split APKs (App Bundles) לקובץ APK יחיד להתקנה.
 
+## ⚠️ חשוב לפריסה ב-Render.com
+
+אם אתה מפרסם את הפרויקט ב-Render.com, **חובה** להגדיר טוקן אימות כמשתנה סביבה:
+
+1. הרץ מקומית: `python gplay-downloader.py auth -r 50`
+2. העתק את תוכן הקובץ `~/.gplay-auth.json`
+3. ב-Render Dashboard, הוסף משתנה סביבה: `GPLAY_AUTH_TOKEN` עם התוכן של הקובץ
+
+**ראה [הוראות מפורטות](RENDER_DEPLOYMENT.md)**
+
 ## תכונות
 
 - הורדת כל אפליקציה חינמית מ-Google Play
