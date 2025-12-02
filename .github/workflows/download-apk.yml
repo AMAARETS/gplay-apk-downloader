@@ -1,0 +1,162 @@
+name: Download APK from Google Play
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_name:
+        description: 'Package name (e.g., com.whatsapp)'
+        required: true
+        type: string
+      architecture:
+        description: 'Architecture'
+        required: true
+        type: choice
+        options:
+          - arm64
+          - armv7
+        default: 'arm64'
+      merge_splits:
+        description: 'Merge split APKs into single APK'
+        required: true
+        type: boolean
+        default: true
+      release_tag:
+        description: 'Release tag (leave empty for auto-generated)'
+        required: false
+        type: string
+
+jobs:
+  download-and-release:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Cache APT packages
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: apksigner
+          version: 1.0
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Cache APKEditor
+        id: cache-apkeditor
+        uses: actions/cache@v4
+        with:
+          path: APKEditor.jar
+          key: apkeditor-latest
+
+      - name: Download APKEditor
+        if: steps.cache-apkeditor.outputs.cache-hit != 'true'
+        run: |
+          curl -L -o APKEditor.jar https://github.com/REAndroid/APKEditor/releases/latest/download/APKEditor.jar
+
+      - name: Cache debug keystore
+        id: cache-keystore
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: android-debug-keystore
+
+      - name: Create debug keystore
+        if: steps.cache-keystore.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/.android
+          keytool -genkey -v -keystore ~/.android/debug.keystore \
+            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+      - name: Authenticate with Google Play
+        run: |
+          python gplay-downloader.py auth
+
+      - name: Download APK
+        id: download
+        run: |
+          mkdir -p downloads
+          
+          # Build download command
+          CMD="python gplay-downloader.py download ${{ inputs.package_name }} -o downloads -a ${{ inputs.architecture }}"
+          
+          if [ "${{ inputs.merge_splits }}" = "true" ]; then
+            CMD="$CMD -m"
+          fi
+          
+          echo "Running: $CMD"
+          $CMD
+          
+          # Find downloaded files
+          APK_FILES=$(find downloads -name "*.apk" -type f)
+          echo "Downloaded files:"
+          echo "$APK_FILES"
+          
+          # Get app info for release notes
+          APP_INFO=$(python gplay-downloader.py info ${{ inputs.package_name }} 2>&1 || echo "")
+          
+          # Extract version from filename
+          FIRST_FILE=$(echo "$APK_FILES" | head -n 1)
+          VERSION=$(basename "$FIRST_FILE" | grep -oP '(?<=-)\d+(?=(-|\.apk))' || echo "unknown")
+          
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "app_info<<EOF" >> $GITHUB_OUTPUT
+          echo "$APP_INFO" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Generate release tag
+        id: tag
+        run: |
+          if [ -n "${{ inputs.release_tag }}" ]; then
+            TAG="${{ inputs.release_tag }}"
+          else
+            TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+            PKG_SHORT=$(echo "${{ inputs.package_name }}" | rev | cut -d. -f1 | rev)
+            TAG="${PKG_SHORT}-${{ inputs.architecture }}-v${{ steps.download.outputs.version }}-${TIMESTAMP}"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Release tag: $TAG"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "${{ inputs.package_name }} (${{ inputs.architecture }})"
+          body: |
+            ## APK Download
+            
+            **Package:** `${{ inputs.package_name }}`  
+            **Architecture:** `${{ inputs.architecture }}`  
+            **Version Code:** `${{ steps.download.outputs.version }}`  
+            **Merged:** `${{ inputs.merge_splits }}`
+            
+            ### App Info
+            ```
+            ${{ steps.download.outputs.app_info }}
+            ```
+            
+            ---
+            *Downloaded automatically via GitHub Actions*
+          files: downloads/*.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+
