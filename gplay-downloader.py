@@ -40,6 +40,30 @@ except ImportError:
     print("Error: requests library not found. Install with: pip install requests")
     sys.exit(1)
 
+try:
+    import urllib3
+    # Disable SSL warnings
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+except ImportError:
+    pass  # urllib3 is optional
+
+import ssl
+
+# Create custom SSL context that doesn't verify certificates
+class NoVerifyHTTPAdapter(requests.adapters.HTTPAdapter):
+    def init_poolmanager(self, *args, **kwargs):
+        kwargs['ssl_context'] = ssl._create_unverified_context()
+        return super().init_poolmanager(*args, **kwargs)
+
+# Create scraper with SSL verification disabled
+def create_scraper_no_verify():
+    scraper = cloudscraper.create_scraper()
+    scraper.verify = False
+    adapter = NoVerifyHTTPAdapter()
+    scraper.mount('https://', adapter)
+    scraper.mount('http://', adapter)
+    return scraper
+
 # Default dispenser URLs for anonymous authentication
 DISPENSER_URLS = [
     "https://auroraoss.com/api/auth",
@@ -182,7 +206,7 @@ def get_dispenser_auth(dispenser_url=None):
     print(f"Authenticating via dispenser: {url}")
 
     # Use cloudscraper to bypass Cloudflare protection
-    scraper = cloudscraper.create_scraper()
+    scraper = create_scraper_no_verify()
 
     headers = {
         'User-Agent': 'com.aurora.store-4.6.1-70',
@@ -244,9 +268,9 @@ def api_request(auth, url, params=None, method='GET'):
 
     try:
         if method == 'GET':
-            response = requests.get(url, headers=headers, params=params, timeout=30)
+            response = requests.get(url, headers=headers, params=params, timeout=30, verify=False)
         else:
-            response = requests.post(url, headers=headers, data=params, timeout=30)
+            response = requests.post(url, headers=headers, data=params, timeout=30, verify=False)
 
         return response
     except Exception as e:
@@ -280,7 +304,7 @@ def cmd_search(args):
 
     # Use web search as fallback (more reliable)
     try:
-        scraper = cloudscraper.create_scraper()
+        scraper = create_scraper_no_verify()
         search_url = f"https://play.google.com/store/search?q={args.query}&c=apps"
 
         response = scraper.get(search_url, timeout=30)
@@ -334,7 +358,7 @@ def cmd_info(args):
 
     try:
         # Use web scraping for app details (more reliable)
-        scraper = cloudscraper.create_scraper()
+        scraper = create_scraper_no_verify()
         url = f"https://play.google.com/store/apps/details?id={args.package}&hl=en"
 
         response = scraper.get(url, timeout=30)
@@ -409,7 +433,7 @@ def cmd_download(args):
         # Step 1: Get app details via protobuf
         print("Getting app details...")
         details_url = f"{DETAILS_URL}?doc={package}"
-        response = requests.get(details_url, headers=headers, timeout=30)
+        response = requests.get(details_url, headers=headers, timeout=30, verify=False)
 
         if response.status_code != 200:
             print(f"Failed to get app details: {response.status_code}")
@@ -442,7 +466,8 @@ def cmd_download(args):
             PURCHASE_URL,
             headers=purchase_headers,
             data=purchase_data,
-            timeout=30
+            timeout=30,
+            verify=False
         )
 
         if purchase_response.status_code not in [200, 204]:
@@ -452,7 +477,7 @@ def cmd_download(args):
         # Step 3: Get delivery URL
         print("Getting download URL...")
         delivery_url = f"{DELIVERY_URL}?doc={package}&ot=1&vc={version_code}"
-        delivery_response = requests.get(delivery_url, headers=headers, timeout=30)
+        delivery_response = requests.get(delivery_url, headers=headers, timeout=30, verify=False)
 
         if delivery_response.status_code != 200:
             print(f"Failed to get download URL: {delivery_response.status_code}")
@@ -490,7 +515,7 @@ def cmd_download(args):
         for cookie in delivery_data.downloadAuthCookie:
             download_headers['Cookie'] = f"{cookie.name}={cookie.value}"
 
-        dl_response = requests.get(download_url, headers=download_headers, stream=True, timeout=60)
+        dl_response = requests.get(download_url, headers=download_headers, stream=True, timeout=60, verify=False)
 
         if dl_response.status_code != 200:
             print(f"Download failed: {dl_response.status_code}")
@@ -518,7 +543,7 @@ def cmd_download(args):
                 split_filepath = output_dir / split_filename
                 print(f"Downloading split: {split_filename}")
 
-                split_response = requests.get(split.downloadUrl, stream=True, timeout=120)
+                split_response = requests.get(split.downloadUrl, stream=True, timeout=120, verify=False)
                 with open(split_filepath, 'wb') as f:
                     for chunk in split_response.iter_content(chunk_size=8192):
                         if chunk:

@@ -17,9 +17,29 @@ from flask import Flask, request, jsonify, send_file, Response
 from flask_cors import CORS
 import requests
 import cloudscraper
+import urllib3
+import ssl
+
+# Disable SSL warnings
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Create custom SSL context that doesn't verify certificates
+class NoVerifyHTTPAdapter(requests.adapters.HTTPAdapter):
+    def init_poolmanager(self, *args, **kwargs):
+        kwargs['ssl_context'] = ssl._create_unverified_context()
+        return super().init_poolmanager(*args, **kwargs)
+
+# Create scraper with SSL verification disabled
+def create_scraper_no_verify():
+    scraper = cloudscraper.create_scraper()
+    scraper.verify = False
+    adapter = NoVerifyHTTPAdapter()
+    scraper.mount('https://', adapter)
+    scraper.mount('http://', adapter)
+    return scraper
 
 # Reusable scraper instance (faster than creating new one each time)
-SCRAPER = cloudscraper.create_scraper()
+SCRAPER = create_scraper_no_verify()
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -377,7 +397,7 @@ def test_auth_token(auth, strict=False):
         # than simple apps like YouTube. If strict=True or default, use Chase.
         test_app = 'com.chase.sig.android' if strict else 'com.google.android.youtube'
 
-        resp = requests.get(f'{DETAILS_URL}?doc={test_app}', headers=headers, timeout=10)
+        resp = requests.get(f'{DETAILS_URL}?doc={test_app}', headers=headers, timeout=10, verify=False)
         if resp.status_code == 200:
             wrapper = googleplay_pb2.ResponseWrapper()
             wrapper.ParseFromString(resp.content)
@@ -444,7 +464,7 @@ def get_download_info(pkg, auth):
     }
 
     # Step 1: Get app details
-    details_resp = requests.get(f'{DETAILS_URL}?doc={pkg}', headers=headers, timeout=30)
+    details_resp = requests.get(f'{DETAILS_URL}?doc={pkg}', headers=headers, timeout=30, verify=False)
     if details_resp.status_code != 200:
         return {'error': f'Failed to get app details: {details_resp.status_code}'}
 
@@ -479,7 +499,7 @@ def get_download_info(pkg, auth):
 
     try:
         logger.info(f"Attempting purchase for {pkg} (vc={version_code})")
-        purchase_resp = requests.post(PURCHASE_URL, headers=purchase_headers, data=purchase_data, timeout=30)
+        purchase_resp = requests.post(PURCHASE_URL, headers=purchase_headers, data=purchase_data, timeout=30, verify=False)
         logger.info(f"Purchase response status: {purchase_resp.status_code}")
         if purchase_resp.status_code not in [200, 204]:
             logger.warning(f"Purchase returned non-success status: {purchase_resp.status_code}")
@@ -493,7 +513,8 @@ def get_download_info(pkg, auth):
     delivery_resp = requests.get(
         f'{DELIVERY_URL}?doc={pkg}&ot=1&vc={version_code}',
         headers=headers,
-        timeout=30
+        timeout=30,
+        verify=False
     )
 
     logger.info(f"Delivery response status: {delivery_resp.status_code}")
@@ -591,7 +612,7 @@ def auth_stream():
             yield f"data: {json.dumps({'type': 'progress', 'attempt': attempt, 'message': f'Trying token #{attempt}...'})}\n\n"
 
             try:
-                scraper = cloudscraper.create_scraper()
+                scraper = create_scraper_no_verify()
                 response = scraper.post(
                     DISPENSER_URL,
                     headers={
@@ -745,7 +766,7 @@ def search():
 @app.route('/api/info/<path:pkg>')
 def info(pkg):
     try:
-        scraper = cloudscraper.create_scraper()
+        scraper = create_scraper_no_verify()
         response = scraper.get(
             f'https://play.google.com/store/apps/details?id={pkg}&hl=en',
             timeout=30
@@ -851,7 +872,7 @@ def download_info_stream(pkg):
 
             try:
                 # Get a fresh token from dispenser with arch-specific config
-                scraper = cloudscraper.create_scraper()
+                scraper = create_scraper_no_verify()
                 response = scraper.post(
                     DISPENSER_URL,
                     headers={
@@ -947,7 +968,7 @@ def download(pkg, split_index=None):
         headers = {'Cookie': cookie_header} if cookie_header else {}
 
         # Stream the download
-        resp = requests.get(url, headers=headers, stream=True, timeout=60)
+        resp = requests.get(url, headers=headers, stream=True, timeout=60, verify=False)
 
         def generate():
             for chunk in resp.iter_content(chunk_size=8192):
@@ -1000,7 +1021,7 @@ def download_merged_stream(pkg):
             for attempt in range(50):
                 yield f"data: {json.dumps({'type': 'progress', 'step': 'auth', 'message': f'Trying token #{attempt+1}...'})}\n\n"
                 try:
-                    scraper = cloudscraper.create_scraper()
+                    scraper = create_scraper_no_verify()
                     response = scraper.post(
                         DISPENSER_URL,
                         headers={
@@ -1041,7 +1062,7 @@ def download_merged_stream(pkg):
         headers = {'Cookie': cookie_header} if cookie_header else {}
 
         try:
-            base_resp = requests.get(info['downloadUrl'], headers=headers, timeout=120)
+            base_resp = requests.get(info['downloadUrl'], headers=headers, timeout=120, verify=False)
             if not base_resp.ok:
                 yield f"data: {json.dumps({'type': 'error', 'message': 'Failed to download base APK'})}\n\n"
                 return
@@ -1063,7 +1084,7 @@ def download_merged_stream(pkg):
             for i, split in enumerate(splits):
                 split_name = split['name']
                 yield f"data: {json.dumps({'type': 'progress', 'step': 'download', 'message': f'Downloading {split_name} ({i+2}/{total_files})...', 'current': i+2, 'total': total_files})}\n\n"
-                split_resp = requests.get(split['downloadUrl'], headers=headers, timeout=120)
+                split_resp = requests.get(split['downloadUrl'], headers=headers, timeout=120, verify=False)
                 if not split_resp.ok:
                     yield f"data: {json.dumps({'type': 'error', 'message': f'Failed to download {split_name}'})}\n\n"
                     return
@@ -1145,7 +1166,7 @@ def download_merged(pkg):
     if not auth_data:
         for attempt in range(100):  # Limit attempts for non-streaming endpoint
             try:
-                scraper = cloudscraper.create_scraper()
+                scraper = create_scraper_no_verify()
                 response = scraper.post(
                     DISPENSER_URL,
                     headers={
@@ -1184,7 +1205,7 @@ def download_merged(pkg):
     try:
         # Download base APK
         logger.info(f"Downloading base APK for {pkg}")
-        base_resp = requests.get(info['downloadUrl'], headers=headers, timeout=120)
+        base_resp = requests.get(info['downloadUrl'], headers=headers, timeout=120, verify=False)
         if not base_resp.ok:
             return jsonify({'error': f'Failed to download base APK: {base_resp.status_code}'}), 500
         base_apk = base_resp.content
@@ -1201,7 +1222,7 @@ def download_merged(pkg):
         splits_data = []
         for split in info['splits']:
             logger.info(f"Downloading split: {split['name']}")
-            split_resp = requests.get(split['downloadUrl'], headers=headers, timeout=120)
+            split_resp = requests.get(split['downloadUrl'], headers=headers, timeout=120, verify=False)
             if not split_resp.ok:
                 return jsonify({'error': f'Failed to download split {split["name"]}: {split_resp.status_code}'}), 500
             splits_data.append((split['name'], split_resp.content))
