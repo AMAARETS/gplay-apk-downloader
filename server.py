@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 GPlay Downloader - Server
-Restored Original Auth Logic + Region Support
+Restored Env Var Priority + Region Support
 """
 import os
 # Fix protobuf compatibility
@@ -20,7 +20,7 @@ import cloudscraper
 import urllib3
 import ssl
 
-# --- 1. SSL & Scraper Setup (EXACTLY AS ORIGINAL) ---
+# --- 1. SSL & Scraper Setup ---
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -38,7 +38,6 @@ def create_scraper_no_verify():
     scraper.mount('http://', adapter)
     return scraper
 
-# Reusable scraper
 SCRAPER = create_scraper_no_verify()
 
 app = Flask(__name__)
@@ -58,54 +57,35 @@ PURCHASE_URL = f"{FDFE_URL}/purchase"
 DELIVERY_URL = f"{FDFE_URL}/delivery"
 DETAILS_URL = f"{FDFE_URL}/details"
 AUTH_CACHE_DIR = Path.home()
-TEMP_APKS = {}
 
 # --- 2. CONFIGURATION PROFILES ---
 
-# Region definitions (Simulating real SIM cards)
 REGIONS = {
     'il': {'lang': 'he_IL', 'tz': 'Asia/Jerusalem', 'sim': '42501', 'cc': 'IL'}, # Partner Israel
     'us': {'lang': 'en_US', 'tz': 'America/New_York', 'sim': '310260', 'cc': 'US'}, # T-Mobile US
     'de': {'lang': 'de_DE', 'tz': 'Europe/Berlin', 'sim': '26201', 'cc': 'DE'}, # Telekom.de
 }
 
-# Base device hardware profiles
 BASE_DEVICES = {
     's23': {
         'UserReadableName': 'Samsung Galaxy S23',
-        'Build.HARDWARE': 'kalama',
-        'Build.PRODUCT': 'kalama',
-        'Build.DEVICE': 'kalama',
-        'Build.MANUFACTURER': 'samsung',
-        'Build.MODEL': 'SM-S911B',
-        'Build.ID': 'UP1A.231005.007',
-        'Build.BOOTLOADER': 'S911BXXU3BWK5',
-        'Build.VERSION.SDK_INT': '34',
-        'Build.VERSION.RELEASE': '14',
+        'Build.HARDWARE': 'kalama', 'Build.PRODUCT': 'kalama', 'Build.DEVICE': 'kalama',
+        'Build.MANUFACTURER': 'samsung', 'Build.MODEL': 'SM-S911B',
+        'Build.ID': 'UP1A.231005.007', 'Build.BOOTLOADER': 'S911BXXU3BWK5',
+        'Build.VERSION.SDK_INT': '34', 'Build.VERSION.RELEASE': '14',
         'Build.FINGERPRINT': 'samsung/kalama/kalama:14/UP1A.231005.007/S911BXXU3BWK5:user/release-keys',
-        'GL.Version': '196610',
-        'Platforms': 'arm64-v8a,armeabi-v7a,armeabi',
-        'Screen.Density': '480',
-        'Screen.Width': '1080',
-        'Screen.Height': '2340',
+        'GL.Version': '196610', 'Platforms': 'arm64-v8a,armeabi-v7a,armeabi',
+        'Screen.Density': '480', 'Screen.Width': '1080', 'Screen.Height': '2340',
     },
     'pixel7': {
         'UserReadableName': 'Google Pixel 7a',
-        'Build.HARDWARE': 'lynx',
-        'Build.PRODUCT': 'lynx',
-        'Build.DEVICE': 'lynx',
-        'Build.MANUFACTURER': 'Google',
-        'Build.MODEL': 'Pixel 7a',
-        'Build.ID': 'UQ1A.231205.015',
-        'Build.BOOTLOADER': 'lynx-1.0-9716681',
-        'Build.VERSION.SDK_INT': '34',
-        'Build.VERSION.RELEASE': '14',
+        'Build.HARDWARE': 'lynx', 'Build.PRODUCT': 'lynx', 'Build.DEVICE': 'lynx',
+        'Build.MANUFACTURER': 'Google', 'Build.MODEL': 'Pixel 7a',
+        'Build.ID': 'UQ1A.231205.015', 'Build.BOOTLOADER': 'lynx-1.0-9716681',
+        'Build.VERSION.SDK_INT': '34', 'Build.VERSION.RELEASE': '14',
         'Build.FINGERPRINT': 'google/lynx/lynx:14/UQ1A.231205.015/11084887:user/release-keys',
-        'GL.Version': '196610',
-        'Platforms': 'arm64-v8a,armeabi-v7a,armeabi',
-        'Screen.Density': '420',
-        'Screen.Width': '1080',
-        'Screen.Height': '2400',
+        'GL.Version': '196610', 'Platforms': 'arm64-v8a,armeabi-v7a,armeabi',
+        'Screen.Density': '420', 'Screen.Width': '1080', 'Screen.Height': '2400',
     }
 }
 
@@ -118,25 +98,19 @@ DEFAULT_PROPS = {
     'Vending.version': '84122900',
     'Vending.versionString': '41.2.29-23 [0] [PR] 639844241',
     'Roaming': 'mobile-notroaming',
-    'CellOperator': '310', # Will be overwritten
-    'SimOperator': '38',   # Will be overwritten
 }
 
 # --- 3. HELPER FUNCTIONS ---
 
 def get_device_config(dev_key, reg_key):
-    """Merges Hardware + Region into the exact JSON format Aurora expects."""
     if dev_key not in BASE_DEVICES: dev_key = 's23'
     if reg_key not in REGIONS: reg_key = 'il'
     
     reg_data = REGIONS[reg_key]
     hw_data = BASE_DEVICES[dev_key]
     
-    # Start with defaults
     config = DEFAULT_PROPS.copy()
-    # Apply Hardware
     config.update(hw_data)
-    # Apply Region
     config['Locales'] = f"{reg_data['lang']},en_US"
     config['TimeZone'] = reg_data['tz']
     config['SimOperator'] = reg_data['sim']
@@ -147,7 +121,6 @@ def get_device_config(dev_key, reg_key):
 def get_headers(auth, reg_key):
     reg = REGIONS.get(reg_key, REGIONS['il'])
     locale = reg['lang'].replace('_', '-')
-    
     device_info = auth.get('deviceInfoProvider', {})
     
     return {
@@ -163,6 +136,18 @@ def get_headers(auth, reg_key):
     }
 
 def get_cached_auth(cache_key):
+    # 1. PRIORITY: Check Environment Variable (Restored!)
+    env_token = os.environ.get('GPLAY_AUTH_TOKEN')
+    if env_token:
+        try:
+            auth = json.loads(env_token)
+            if auth.get('authToken'):
+                logger.info("Using auth token from Environment Variable")
+                return auth
+        except: 
+            logger.warning("Failed to parse GPLAY_AUTH_TOKEN")
+
+    # 2. Check File Cache
     path = AUTH_CACHE_DIR / f".gplay-auth-{cache_key}.json"
     if path.exists():
         try:
@@ -188,8 +173,6 @@ def get_download_info_internal(pkg, auth, reg_key):
 
     # A. DETAILS
     try:
-        # Note: We must verify=False for proxies/debug tools to work, 
-        # and standard request timeouts to avoid hanging
         r = requests.get(f'{DETAILS_URL}?doc={pkg}', headers=headers, timeout=15, verify=False)
         wrapper = googleplay_pb2.ResponseWrapper()
         wrapper.ParseFromString(r.content)
@@ -243,7 +226,6 @@ def search():
     hl = REGIONS.get(reg, REGIONS['il'])['lang'].split('_')[0]
     
     try:
-        # Use cloudscraper for search page to avoid bot detection
         html = SCRAPER.get(f'https://play.google.com/store/search?q={q}&c=apps&hl={hl}&gl={reg}', timeout=10).text
         results = []
         for m in re.finditer(r'href="/store/apps/details\?id=([^"]+)"[^>]*><div[^>]*>([^<]+)</div>', html):
@@ -279,33 +261,27 @@ def stream(pkg):
     cache_key = f"{dev_key}_{reg_key}"
     
     def generate():
-        # 1. Try Cached
+        # 1. Try Cached (Env Var or File)
         cached = get_cached_auth(cache_key)
         if cached:
-            yield f"data: {json.dumps({'type':'progress','msg':'Using cached token...'})}\n\n"
+            yield f"data: {json.dumps({'type':'progress','msg':'Using cached/env token...'})}\n\n"
             res = get_download_info_internal(pkg, cached, reg_key)
             if 'error' not in res:
                 yield f"data: {json.dumps({'type':'success', **res})}\n\n"
                 return
-            yield f"data: {json.dumps({'type':'progress','msg':'Cached token failed, getting new one...'})}\n\n"
+            yield f"data: {json.dumps({'type':'progress','msg':'Cached token failed, trying new...'})}\n\n"
 
-        # 2. Get New Token Loop (RESTORED ORIGINAL LOGIC)
-        scraper = create_scraper_no_verify() # Must create fresh one or reuse properly
-        headers = {
-            'User-Agent': 'com.aurora.store-4.6.1-70',
-            'Content-Type': 'application/json'
-        }
+        # 2. Get New Token Loop
+        scraper = create_scraper_no_verify()
+        headers = {'User-Agent': 'com.aurora.store-4.6.1-70', 'Content-Type': 'application/json'}
         
         for i in range(1, 8):
-            yield f"data: {json.dumps({'type':'progress','msg':f'Token Attempt #{i}...'})}\n\n"
+            yield f"data: {json.dumps({'type':'progress','msg':f'Generating Token #{i}...'})}\n\n"
             try:
-                # This is the EXACT call structure that worked in original code
                 r = scraper.post(DISPENSER_URL, json=config, headers=headers, timeout=30)
-                
                 if r.status_code == 200:
                     auth = r.json()
                     res = get_download_info_internal(pkg, auth, reg_key)
-                    
                     if 'error' not in res:
                         save_cached_auth(auth, cache_key)
                         yield f"data: {json.dumps({'type':'success', **res})}\n\n"
@@ -313,26 +289,21 @@ def stream(pkg):
                     else:
                         yield f"data: {json.dumps({'type':'progress','msg':f'Error: {res["error"]}'})}\n\n"
                 else:
-                    yield f"data: {json.dumps({'type':'progress','msg':f'Dispenser Error: {r.status_code}'})}\n\n"
-                    
+                    yield f"data: {json.dumps({'type':'progress','msg':f'Dispenser Err: {r.status_code}'})}\n\n"
             except Exception as e:
-                yield f"data: {json.dumps({'type':'progress','msg':f'Net Error: {str(e)[:20]}'})}\n\n"
+                yield f"data: {json.dumps({'type':'progress','msg':f'Net Err: {str(e)[:20]}'})}\n\n"
+            time.sleep(1.5)
             
-            time.sleep(1.5) # Don't hammer the server
-            
-        yield f"data: {json.dumps({'type':'error', 'msg':'Failed to get working token after retries'})}\n\n"
+        yield f"data: {json.dumps({'type':'error', 'msg':'Failed to find working token'})}\n\n"
 
     return Response(generate(), mimetype='text/event-stream')
 
-# --- PROXY DOWNLOAD (Fixes CORS/ZIP issues) ---
 @app.route('/proxy-download')
 def proxy_dl():
     url = request.args.get('url')
     cookie = request.args.get('cookie')
     name = request.args.get('name', 'file.apk')
-    
     headers = {'Cookie': cookie} if cookie else {}
-    
     try:
         r = requests.get(url, headers=headers, stream=True, verify=False, timeout=120)
         return Response(r.iter_content(chunk_size=8192), 
