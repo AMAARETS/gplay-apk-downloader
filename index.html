@@ -1,376 +1,249 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="he" dir="rtl">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <meta name="theme-color" content="#1a1a2e">
-  <title>GPlay Downloader</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #1a1a2e; color: #eee;
-      min-height: 100vh; padding: 16px;
-    }
-    .container { max-width: 600px; margin: 0 auto; }
-    h1 { text-align: center; margin-bottom: 24px; color: #00d9ff; font-size: clamp(1.5rem, 5vw, 2rem); }
-    .card { background: #16213e; border-radius: 16px; padding: 20px; margin-bottom: 16px; }
-    .card h2 { margin-bottom: 12px; color: #00d9ff; font-size: 1.1em; }
-    .status { display: inline-block; padding: 6px 14px; border-radius: 20px; font-size: 0.85em; }
-    .status.ok { background: #0a3d2a; color: #4ade80; }
-    .status.err { background: #3d0a0a; color: #f87171; }
-    input[type="text"] {
-      width: 100%; padding: 14px 16px; border: 2px solid #0f3460; border-radius: 12px;
-      background: #0f3460; color: #fff; font-size: 16px; margin-bottom: 12px;
-    }
-    input:focus { outline: none; border-color: #00d9ff; background: #0f3460; }
-    input:-webkit-autofill { -webkit-box-shadow: 0 0 0 30px #0f3460 inset !important; -webkit-text-fill-color: #fff !important; }
-    button {
-      padding: 14px 24px; border: none; border-radius: 12px; background: #00d9ff;
-      color: #000; font-weight: 600; font-size: 15px; cursor: pointer;
-    }
-    button:hover { background: #00b8d9; }
-    button:disabled { background: #444; color: #888; cursor: not-allowed; }
-    button.sec { background: #0f3460; color: #fff; }
-    .btn-row { display: flex; gap: 10px; flex-wrap: wrap; }
-    .btn-row button { flex: 1; min-width: 100px; }
-    .results { margin-top: 16px; }
-    .app-item {
-      display: flex; align-items: center; padding: 16px; background: #0f3460;
-      border-radius: 12px; margin-bottom: 12px; gap: 12px; flex-wrap: wrap;
-    }
-    .app-icon { width: 48px; height: 48px; border-radius: 10px; object-fit: cover; background: #1a1a2e; flex-shrink: 0; }
-    .app-info { flex: 1; min-width: 150px; }
-    .app-info h3 { font-size: 1em; margin-bottom: 4px; }
-    .app-info .pkg { font-size: 0.8em; color: #888; word-break: break-all; }
-    .msg { padding: 14px 16px; border-radius: 12px; margin-bottom: 12px; }
-    .msg.err { background: #3d0a0a; color: #f87171; }
-    .msg.ok { background: #0a3d2a; color: #4ade80; }
-    .msg.info { background: #0a2a3d; color: #60a5fa; }
-    .loading { text-align: center; padding: 24px; color: #888; }
-    .spin { display: inline-block; width: 20px; height: 20px; border: 2px solid #333;
-      border-top-color: #00d9ff; border-radius: 50%; animation: spin 1s linear infinite;
-      margin-right: 10px; vertical-align: middle; }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .app-actions { display: flex; gap: 8px; }
-    .progress { width: 100%; height: 8px; background: #0f3460; border-radius: 4px; margin-top: 10px; }
-    .progress-bar { height: 100%; background: #00d9ff; border-radius: 4px; transition: width 0.3s; }
-    a { text-decoration: none; }
-    a button { width: 100%; }
-    @media (max-width: 480px) { .app-actions { width: 100%; } .app-actions button { flex: 1; } }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>מוריד APK מתקדם</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        :root { --bg: #121212; --card: #1e1e1e; --primary: #bb86fc; --text: #e0e0e0; }
+        body { background: var(--bg); color: var(--text); font-family: sans-serif; margin: 0; padding: 20px; }
+        .container { max-width: 700px; margin: 0 auto; }
+        .card { background: var(--card); padding: 20px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        h1, h2 { color: var(--primary); margin-top: 0; }
+        
+        .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; }
+        select, input, button { width: 100%; padding: 12px; background: #2c2c2c; border: 1px solid #444; color: white; border-radius: 8px; font-size: 16px; box-sizing: border-box;}
+        button { background: var(--primary); color: #000; font-weight: bold; cursor: pointer; border: none; transition: 0.2s; }
+        button:hover { opacity: 0.9; }
+        button.secondary { background: #333; color: white; }
+        
+        .app-result { display: flex; align-items: center; gap: 15px; padding: 10px; background: #252525; margin-bottom: 8px; border-radius: 8px; }
+        .app-result button { width: auto; padding: 8px 16px; margin-right: auto; }
+        
+        .status-box { padding: 15px; border-radius: 8px; margin-top: 15px; display: none; }
+        .status-box.info { background: #0d47a1; display: block; }
+        .status-box.success { background: #1b5e20; display: block; }
+        .status-box.error { background: #b71c1c; display: block; }
+        
+        .progress-bar { width: 100%; height: 6px; background: #444; border-radius: 3px; margin-top: 10px; overflow: hidden; }
+        .fill { height: 100%; background: var(--primary); width: 0%; transition: width 0.3s; }
+    </style>
 </head>
 <body>
-  <div class="container">
-    <h1>GPlay Downloader</h1>
+
+<div class="container">
+    <h1>📥 GPlay Downloader</h1>
+    
+    <!-- הגדרות גלובליות -->
     <div class="card">
-      <h2>Direct Download</h2>
-      <input type="text" id="pkg-input" placeholder="com.example.app">
-      <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
-        <select id="arch-select" style="padding:10px;border-radius:8px;background:#0f3460;color:#fff;border:2px solid #0f3460;flex:1;min-width:150px">
-          <option value="arm64-v8a">ARM64 (modern phones)</option>
-          <option value="armeabi-v7a">ARMv7 (older phones)</option>
-        </select>
-        <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
-          <input type="checkbox" id="merge-apks" checked style="width:18px;height:18px">
-          <span>Merge to single APK</span>
-        </label>
-      </div>
-      <div style="font-size:0.75em;color:#888;margin-bottom:12px;line-height:1.4">
-        Note: Merged APKs are re-signed with a debug key and will not receive automatic updates from Google Play. Apps without splits are downloaded with their original signature.
-      </div>
-      <div class="btn-row">
-        <button class="sec" onclick="getInfo()">Get Info</button>
-        <button onclick="download()">Download</button>
-      </div>
-      <div id="info-result" class="results"></div>
+        <h2>⚙️ הגדרות</h2>
+        <div class="controls">
+            <div>
+                <label>אזור (חנות):</label>
+                <select id="region">
+                    <option value="il" selected>🇮🇱 ישראל (Partner)</option>
+                    <option value="us">🇺🇸 ארה"ב (T-Mobile)</option>
+                    <option value="de">🇩🇪 גרמניה</option>
+                </select>
+            </div>
+            <div>
+                <label>מכשיר:</label>
+                <select id="device">
+                    <option value="s23" selected>Samsung S23 (מומלץ)</option>
+                    <option value="pixel7">Google Pixel 7a</option>
+                    <option value="j7">Samsung J7 (ישן 32bit)</option>
+                </select>
+            </div>
+        </div>
     </div>
+
+    <!-- חיפוש -->
     <div class="card">
-      <h2>Search Apps</h2>
-      <input type="text" id="search-q" placeholder="Search apps" onkeypress="if(event.key==='Enter')search()">
-      <div class="btn-row"><button onclick="search()">Search</button></div>
-      <div id="search-results" class="results"></div>
+        <h2>🔍 חיפוש והורדה</h2>
+        <div class="controls" style="grid-template-columns: 3fr 1fr;">
+            <input type="text" id="pkg" placeholder="שם חבילה (com.waze) או חיפוש">
+            <button onclick="handleSearch()">חפש / בדוק</button>
+        </div>
+        <div id="search-results"></div>
     </div>
-  </div>
-  <script>
-    const $ = s => document.querySelector(s);
 
-    // Global state - track ALL EventSources
-    let downloadEventSource = null;
-    let mergeEventSource = null;
-    let currentDownloadInfo = null;
+    <!-- אזור הורדה -->
+    <div id="status-area" class="status-box"></div>
+</div>
 
-    // Clear ALL download state
-    function clearDownloadState() {
-      if (downloadEventSource) {
-        downloadEventSource.close();
-        downloadEventSource = null;
-      }
-      if (mergeEventSource) {
-        mergeEventSource.close();
-        mergeEventSource = null;
-      }
-      currentDownloadInfo = null;
+<script>
+    let currentData = null;
+    let eventSource = null;
+
+    function getSettings() {
+        return `region=${document.getElementById('region').value}&device=${document.getElementById('device').value}`;
     }
 
-    // Clear download info and stop any ongoing download when architecture changes
-    document.addEventListener('DOMContentLoaded', () => {
-      $('#arch-select').addEventListener('change', () => {
-        clearDownloadState();
-        $('#info-result').innerHTML = '';
-      });
-    });
+    async function handleSearch() {
+        const query = document.getElementById('pkg').value.trim();
+        if(!query) return;
 
-    async function search() {
-      const q = $('#search-q').value.trim();
-      if (!q) return;
-      const el = $('#search-results');
-      el.innerHTML = '<div class="loading"><span class="spin"></span>Searching...</div>';
-      try {
-        const d = await fetch('/api/search?q=' + encodeURIComponent(q)).then(r => r.json());
-        if (d.error) { el.innerHTML = '<div class="msg err">' + d.error + '</div>'; return; }
-        if (!d.results?.length) { el.innerHTML = '<div class="msg info">No results</div>'; return; }
-        el.innerHTML = d.results.map(a =>
-          '<div class="app-item">' +
-          (a.icon ? '<img class="app-icon" src="' + a.icon + '" alt="">' : '') +
-          '<div class="app-info"><h3>' + (a.title || a.package) + '</h3><div class="pkg">' + a.package + '</div></div>' +
-          '<div class="app-actions"><button onclick="dl(\'' + a.package + '\')">Download</button></div></div>'
-        ).join('');
-      } catch(e) { el.innerHTML = '<div class="msg err">' + e + '</div>'; }
-    }
+        const resultsDiv = document.getElementById('search-results');
+        resultsDiv.innerHTML = '<div style="text-align:center">מחפש...</div>';
 
-    function sel(pkg) { $('#pkg-input').value = pkg; getInfo(); }
-
-    async function getInfo() {
-      const pkg = $('#pkg-input').value.trim();
-      if (!pkg) return;
-      const el = $('#info-result');
-      el.innerHTML = '<div class="loading"><span class="spin"></span>Getting info...</div>';
-      try {
-        const d = await fetch('/api/info/' + encodeURIComponent(pkg)).then(r => r.json());
-        if (d.error) { el.innerHTML = '<div class="msg err">' + d.error + '</div>'; return; }
-        el.innerHTML = '<div class="app-item"><div class="app-info"><h3>' + d.title + '</h3><div class="pkg">' + d.package + '</div><div class="pkg">by ' + d.developer + '</div></div><div class="app-actions"><button onclick="dl(\'' + d.package + '\')">Download</button></div></div>';
-      } catch(e) { el.innerHTML = '<div class="msg err">' + e + '</div>'; }
-    }
-
-    function download() {
-      const pkg = $('#pkg-input').value.trim();
-      if (!pkg) { alert('Enter package name'); return; }
-      dl(pkg);
-    }
-
-    function stopDownload() {
-      clearDownloadState();
-      $('#info-result').innerHTML = '<div class="msg info">Download cancelled</div>';
-    }
-
-    async function dl(pkg) {
-      // Clear ALL state before starting a new download
-      clearDownloadState();
-      $('#info-result').innerHTML = '';
-
-      const el = $('#info-result');
-      // Read arch fresh from dropdown EVERY time
-      const arch = $('#arch-select').value;
-      const shouldMerge = $('#merge-apks').checked;
-
-      console.log('dl() called with pkg=' + pkg + ', arch=' + arch);
-
-      el.innerHTML = '<div class="loading"><span class="spin"></span>Preparing (' + arch + ')...<br><button class="sec" onclick="stopDownload()" style="margin-top:10px">Stop</button></div>';
-
-      // Use streaming endpoint that tries unlimited tokens, with arch parameter and cache buster
-      const cacheBuster = Date.now();
-      const url = '/api/download-info-stream/' + encodeURIComponent(pkg) + '?arch=' + arch + '&_=' + cacheBuster;
-      console.log('EventSource URL: ' + url);
-      downloadEventSource = new EventSource(url);
-
-      downloadEventSource.onmessage = function(event) {
-        const d = JSON.parse(event.data);
-
-        if (d.type === 'progress') {
-          el.innerHTML = '<div class="msg info"><span class="spin"></span>' + d.message +
-            '<br><small>Attempt #' + d.attempt + ' (will keep trying until success)</small>' +
-            '<br><button class="sec" onclick="stopDownload()" style="margin-top:10px">Stop</button></div>';
-        } else if (d.type === 'success') {
-          downloadEventSource.close();
-          downloadEventSource = null;
-
-          currentDownloadInfo = { pkg, arch, ...d };
-          const hasSplits = d.splits?.length > 0;
-          const totalFiles = 1 + (d.splits?.length || 0);
-
-          const archLabel = arch === 'arm64-v8a' ? 'ARM64' : 'ARMv7';
-          // Show which splits were returned to verify correct arch
-          const splitNames = d.splits ? d.splits.map(s => s.name).join(', ') : 'none';
-          console.log('Received splits: ' + splitNames);
-
-          let html = '<div class="msg ok"><strong>' + d.title + '</strong><br>Version: ' + d.version + ' | ' + archLabel + '<br>Size: ' + d.size;
-          html += '<br><small>Found working token after ' + d.attempt + ' attempts</small>';
-          if (hasSplits) {
-            html += '<br><strong>' + totalFiles + ' APK files</strong>: ' + splitNames;
-          }
-          html += '</div>';
-
-          html += '<div class="app-item"><div class="app-info">';
-
-          if (hasSplits && shouldMerge) {
-            html += '<h3>Download Merged APK</h3>';
-            html += '<div class="pkg">Single installable APK (merged from ' + totalFiles + ' files)</div>';
-          } else if (hasSplits) {
-            html += '<h3>Download All (' + totalFiles + ' APKs as ZIP)</h3>';
-            html += '<div class="pkg">Includes base APK and all splits</div>';
-          } else {
-            html += '<h3>Download APK</h3>';
-            html += '<div class="pkg">' + d.filename + '</div>';
-          }
-          html += '</div><div class="app-actions">';
-
-          if (hasSplits && shouldMerge) {
-            html += '<button onclick="downloadMerged(\'' + pkg + '\')">Download Merged APK</button>';
-          } else if (hasSplits) {
-            html += '<button onclick="downloadAll()">Download ZIP</button>';
-          } else {
-            html += '<a href="' + d.downloadUrl + '" download="' + d.filename + '"><button>Download</button></a>';
-          }
-          html += '</div></div>';
-
-          html += '<div id="download-progress"></div>';
-          el.innerHTML = html;
+        // אם זה נראה כמו שם חבילה
+        if (query.includes('.') && !query.includes(' ')) {
+            getInfo(query);
+            return;
         }
-      };
 
-      downloadEventSource.onerror = function(e) {
-        downloadEventSource.close();
-        downloadEventSource = null;
-        el.innerHTML = '<div class="msg err">Connection error. Please try again.</div>';
-      };
-    }
-
-    function downloadMerged(pkg) {
-      // Close any existing merge EventSource
-      if (mergeEventSource) {
-        mergeEventSource.close();
-        mergeEventSource = null;
-      }
-
-      // Read arch fresh from dropdown EVERY time
-      const arch = $('#arch-select').value;
-      console.log('downloadMerged() called with pkg=' + pkg + ', arch=' + arch);
-
-      const progressEl = $('#download-progress');
-      progressEl.innerHTML = '<div class="msg info"><span class="spin"></span>Starting merge (' + arch + ')...</div>';
-
-      const cacheBuster = Date.now();
-      const url = '/api/download-merged-stream/' + encodeURIComponent(pkg) + '?arch=' + arch + '&_=' + cacheBuster;
-      console.log('Merge EventSource URL: ' + url);
-      mergeEventSource = new EventSource(url);
-
-      mergeEventSource.onmessage = function(event) {
-        const d = JSON.parse(event.data);
-
-        if (d.type === 'progress') {
-          let pct = '';
-          if (d.current && d.total) {
-            pct = '<div class="progress" style="margin-top:8px"><div class="progress-bar" style="width:' + Math.round((d.current/d.total)*100) + '%"></div></div>';
-          }
-          progressEl.innerHTML = '<div class="msg info"><span class="spin"></span>' + d.message + pct + '</div>';
-        } else if (d.type === 'success') {
-          mergeEventSource.close();
-          mergeEventSource = null;
-          if (d.original) {
-            progressEl.innerHTML = '<div class="msg ok">Download complete! (original signature preserved)</div>';
-          } else {
-            progressEl.innerHTML = '<div class="msg ok">Merge complete! Starting download...</div>';
-          }
-          // Trigger download
-          window.location.href = '/api/download-temp/' + d.download_id;
-        } else if (d.type === 'error') {
-          mergeEventSource.close();
-          mergeEventSource = null;
-          progressEl.innerHTML = '<div class="msg err">Error: ' + d.message + '</div>';
+        // אחרת חיפוש
+        try {
+            const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&${getSettings()}`);
+            const data = await res.json();
+            
+            if(data.results) {
+                resultsDiv.innerHTML = data.results.map(app => `
+                    <div class="app-result">
+                        <div>
+                            <div style="font-weight:bold">${app.title}</div>
+                            <div style="font-size:0.8em; opacity:0.7">${app.package}</div>
+                        </div>
+                        <button onclick="getInfo('${app.package}')">בחר</button>
+                    </div>
+                `).join('');
+            }
+        } catch(e) {
+            resultsDiv.innerHTML = 'שגיאה בחיפוש';
         }
-      };
-
-      mergeEventSource.onerror = function() {
-        mergeEventSource.close();
-        mergeEventSource = null;
-        progressEl.innerHTML = '<div class="msg err">Connection error. Please try again.</div>';
-      };
     }
 
-    async function downloadAll() {
-      if (!currentDownloadInfo) return;
-      const { pkg, filename, versionCode, splits, downloadUrl } = currentDownloadInfo;
-      const progressEl = $('#download-progress');
-      const totalFiles = 1 + splits.length;
-      let downloaded = 0;
+    async function getInfo(pkg) {
+        const el = document.getElementById('status-area');
+        el.className = 'status-box info';
+        el.innerHTML = 'מקבל פרטים...';
+        
+        try {
+            const res = await fetch(`/api/info/${pkg}?${getSettings()}`);
+            const data = await res.json();
+            
+            el.innerHTML = `
+                <h3>${data.title}</h3>
+                <div>מפתח: ${data.developer}</div>
+                <div style="margin-top:10px">
+                    <button onclick="startDownload('${data.package}')">🚀 התחל תהליך הורדה</button>
+                </div>
+            `;
+        } catch(e) {
+            el.className = 'status-box error';
+            el.innerHTML = 'שגיאה בקבלת פרטים: ' + e;
+        }
+    }
 
-      progressEl.innerHTML = '<div class="msg info">Downloading... <span id="dl-status">0/' + totalFiles + '</span></div><div class="progress"><div class="progress-bar" id="dl-bar" style="width:0%"></div></div>';
+    function startDownload(pkg) {
+        if(eventSource) eventSource.close();
+        
+        const el = document.getElementById('status-area');
+        el.className = 'status-box info';
+        el.innerHTML = 'מתחבר לשרת לקבלת קישור הורדה...<div class="progress-bar"><div class="fill" style="width:10%"></div></div>';
 
-      try {
+        eventSource = new EventSource(`/api/download-info-stream/${pkg}?${getSettings()}`);
+        
+        eventSource.onmessage = function(e) {
+            const msg = JSON.parse(e.data);
+            
+            if(msg.type === 'progress') {
+                el.innerHTML = `${msg.msg}<div class="progress-bar"><div class="fill" style="width:50%"></div></div>`;
+            } else if(msg.type === 'error') {
+                el.className = 'status-box error';
+                el.innerHTML = `שגיאה: ${msg.msg}`;
+                eventSource.close();
+            } else if(msg.type === 'success') {
+                eventSource.close();
+                currentData = msg;
+                showDownloadOptions(msg);
+            }
+        };
+    }
+
+    function showDownloadOptions(data) {
+        const el = document.getElementById('status-area');
+        el.className = 'status-box success';
+        
+        const splitCount = data.splits.length;
+        const totalSize = formatSize(data.size);
+        
+        let html = `
+            <h3>✅ נמצאה הורדה!</h3>
+            <div>גרסה: ${data.version} (${data.versionCode})</div>
+            <div>גודל: ${totalSize}</div>
+            <div>קבצים: ${1 + splitCount} (Base + Splits)</div>
+            <div style="display:flex; gap:10px; margin-top:15px;">
+        `;
+
+        // אופציה 1: ZIP
+        if (splitCount > 0) {
+            html += `<button onclick="downloadZip()">📦 הורד כ-ZIP (ללא מיזוג)</button>`;
+        } else {
+             // הורדה ישירה אם אין פיצולים
+            const cookieStr = data.cookies.map(c => `${c.name}=${c.value}`).join('; ');
+            const proxyUrl = `/proxy-download?url=${encodeURIComponent(data.downloadUrl)}&cookie=${encodeURIComponent(cookieStr)}&name=${data.package}.apk`;
+            html += `<a href="${proxyUrl}" target="_blank"><button>⬇️ הורד APK מקורי</button></a>`;
+        }
+
+        html += `</div>`;
+        el.innerHTML = html;
+    }
+
+    async function downloadZip() {
+        if (!currentData) return;
+        
+        const el = document.getElementById('status-area');
+        el.innerHTML += `<div style="margin-top:10px">מכין ZIP... <span id="zip-prog">0%</span></div>`;
+        
         const zip = new JSZip();
+        const cookieStr = currentData.cookies.map(c => `${c.name}=${c.value}`).join('; ');
+        
+        // Helper to fetch via proxy
+        const fetchFile = async (url, name) => {
+            const proxyUrl = `/proxy-download?url=${encodeURIComponent(url)}&cookie=${encodeURIComponent(cookieStr)}`;
+            const res = await fetch(proxyUrl);
+            if(!res.ok) throw new Error('Download failed');
+            return res.blob();
+        };
 
-        // Try direct download first, fall back to proxy
-        async function fetchFile(directUrl, proxyUrl) {
-          try {
-            // Try direct first
-            const resp = await fetch(directUrl);
-            if (resp.ok) return resp.blob();
-          } catch(e) {
-            console.log('Direct download failed, using proxy:', e);
-          }
-          // Fall back to proxy
-          const resp = await fetch(proxyUrl);
-          if (!resp.ok) throw new Error('Download failed');
-          return resp.blob();
+        try {
+            // 1. Base APK
+            document.getElementById('zip-prog').innerText = 'מוריד Base...';
+            const baseBlob = await fetchFile(currentData.downloadUrl, 'base.apk');
+            zip.file(`${currentData.package}-base.apk`, baseBlob);
+
+            // 2. Splits
+            for(let i=0; i<currentData.splits.length; i++) {
+                const s = currentData.splits[i];
+                document.getElementById('zip-prog').innerText = `מוריד ${s.name}...`;
+                const blob = await fetchFile(s.url, s.name);
+                zip.file(`${currentData.package}-${s.name}.apk`, blob);
+            }
+
+            // 3. Generate
+            document.getElementById('zip-prog').innerText = 'יוצר קובץ...';
+            const content = await zip.generateAsync({type:"blob"});
+            
+            // 4. Download
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(content);
+            link.download = `${currentData.package}-${currentData.versionCode}.zip`;
+            link.click();
+            
+            document.getElementById('zip-prog').innerText = 'הושלם!';
+        } catch(e) {
+            alert('שגיאה ביצירת ה-ZIP: ' + e.message);
         }
-
-        // Download base APK
-        const baseBlob = await fetchFile(downloadUrl, '/download/' + encodeURIComponent(pkg));
-        zip.file(filename, baseBlob);
-        downloaded++;
-        updateProgress(downloaded, totalFiles);
-
-        // Download splits
-        for (let i = 0; i < splits.length; i++) {
-          const splitBlob = await fetchFile(
-            splits[i].downloadUrl,
-            '/download/' + encodeURIComponent(pkg) + '/' + i
-          );
-          zip.file(splits[i].filename, splitBlob);
-          downloaded++;
-          updateProgress(downloaded, totalFiles);
-        }
-
-        // Generate ZIP
-        progressEl.innerHTML = '<div class="msg info">Creating ZIP...</div>';
-        const zipBlob = await zip.generateAsync({ type: 'blob' });
-
-        // Download ZIP
-        const url = URL.createObjectURL(zipBlob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = pkg + '-' + versionCode + '.zip';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-
-        progressEl.innerHTML = '<div class="msg ok">Download complete!</div>';
-      } catch(e) {
-        progressEl.innerHTML = '<div class="msg err">Error: ' + e.message + '</div>';
-      }
     }
 
-    function updateProgress(current, total) {
-      const pct = Math.round((current / total) * 100);
-      const statusEl = $('#dl-status');
-      const barEl = $('#dl-bar');
-      if (statusEl) statusEl.textContent = current + '/' + total;
-      if (barEl) barEl.style.width = pct + '%';
+    function formatSize(bytes) {
+        if(bytes == 0) return '0 B';
+        var k = 1024, sizes = ['B', 'KB', 'MB', 'GB'], i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     }
+</script>
 
-  </script>
 </body>
 </html>
