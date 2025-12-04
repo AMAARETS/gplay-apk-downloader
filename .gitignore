@@ -6,3 +6,4 @@ __pycache__/
 *.log
 nohup.out
 analysis/
+gplay-apk-downloader.xml
