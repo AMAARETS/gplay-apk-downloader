@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
 GPlay Downloader - Server
-Fixed Regex errors & Added Region Support
+Restored Original Auth Logic + Region Support
 """
 import os
+# Fix protobuf compatibility
 os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'
 
 import json
 import re
 import logging
-import uuid
 import time
+import uuid
 from pathlib import Path
 from flask import Flask, request, jsonify, send_file, Response
 from flask_cors import CORS
@@ -19,193 +20,204 @@ import cloudscraper
 import urllib3
 import ssl
 
-# SSL & Logging Setup
+# --- 1. SSL & Scraper Setup (EXACTLY AS ORIGINAL) ---
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Scraper Setup
 class NoVerifyHTTPAdapter(requests.adapters.HTTPAdapter):
     def init_poolmanager(self, *args, **kwargs):
         kwargs['ssl_context'] = ssl._create_unverified_context()
         return super().init_poolmanager(*args, **kwargs)
 
-def create_scraper():
-    s = cloudscraper.create_scraper()
-    s.verify = False
-    s.mount('https://', NoVerifyHTTPAdapter())
-    return s
+def create_scraper_no_verify():
+    scraper = cloudscraper.create_scraper()
+    scraper.verify = False
+    adapter = NoVerifyHTTPAdapter()
+    scraper.mount('https://', adapter)
+    scraper.mount('http://', adapter)
+    return scraper
 
-SCRAPER = create_scraper()
+# Reusable scraper
+SCRAPER = create_scraper_no_verify()
+
 app = Flask(__name__)
 CORS(app)
 
-# Protobuf Check
 try:
     from gpapi import googleplay_pb2
     HAS_GPAPI = True
 except:
     HAS_GPAPI = False
-    logger.warning("gpapi not found! Downloads will fail.")
+    logger.warning("gpapi library missing! Downloads will fail.")
 
 # Constants
-DISPENSER_URL = 'https://auroraoss.com/api/auth'
-FDFE_URL = 'https://android.clients.google.com/fdfe'
-PURCHASE_URL = f'{FDFE_URL}/purchase'
-DELIVERY_URL = f'{FDFE_URL}/delivery'
-DETAILS_URL = f'{FDFE_URL}/details'
-
-# --- CONFIGURATION ---
-
-REGIONS = {
-    'il': {'code': 'il', 'lang': 'he_IL', 'tz': 'Asia/Jerusalem', 'sim': '42501', 'cc': 'IL'}, # Israel (Partner)
-    'us': {'code': 'us', 'lang': 'en_US', 'tz': 'America/New_York', 'sim': '310260', 'cc': 'US'}, # USA (T-Mobile)
-    'de': {'code': 'de', 'lang': 'de_DE', 'tz': 'Europe/Berlin', 'sim': '26201', 'cc': 'DE'}, # Germany (Telekom)
-}
-
-# Base profiles without region data
-BASE_DEVICES = {
-    's23': {
-        'name': 'Samsung S23',
-        'build_props': {
-            'Build.MANUFACTURER': 'samsung',
-            'Build.MODEL': 'SM-S911B',
-            'Build.PRODUCT': 'kalama',
-            'Build.DEVICE': 'kalama',
-            'Build.FINGERPRINT': 'samsung/kalama/kalama:14/UP1A.231005.007/S911BXXU3BWK5:user/release-keys',
-            'Build.VERSION.SDK_INT': '34',
-            'GL.Version': '196610',
-            'Platforms': 'arm64-v8a,armeabi-v7a,armeabi'
-        }
-    },
-    'pixel7': {
-        'name': 'Pixel 7a',
-        'build_props': {
-            'Build.MANUFACTURER': 'Google',
-            'Build.MODEL': 'Pixel 7a',
-            'Build.PRODUCT': 'lynx',
-            'Build.DEVICE': 'lynx',
-            'Build.FINGERPRINT': 'google/lynx/lynx:14/UQ1A.231205.015/11084887:user/release-keys',
-            'Build.VERSION.SDK_INT': '34',
-            'GL.Version': '196610',
-            'Platforms': 'arm64-v8a,armeabi-v7a,armeabi'
-        }
-    },
-    'j7': {
-        'name': 'Galaxy J7 (Old)',
-        'build_props': {
-            'Build.MANUFACTURER': 'samsung',
-            'Build.MODEL': 'SM-J710F',
-            'Build.VERSION.SDK_INT': '27',
-            'Platforms': 'armeabi-v7a,armeabi'
-        }
-    }
-}
-
-# Defaults
-DEFAULT_REGION = 'il'
-DEFAULT_DEVICE = 's23'
+DISPENSER_URL = "https://auroraoss.com/api/auth"
+FDFE_URL = "https://android.clients.google.com/fdfe"
+PURCHASE_URL = f"{FDFE_URL}/purchase"
+DELIVERY_URL = f"{FDFE_URL}/delivery"
+DETAILS_URL = f"{FDFE_URL}/details"
 AUTH_CACHE_DIR = Path.home()
 TEMP_APKS = {}
 
-# --- HELPERS ---
+# --- 2. CONFIGURATION PROFILES ---
 
-def get_device_config(device_key, region_key):
-    """Generates a full device config by merging hardware + region."""
-    if device_key not in BASE_DEVICES: device_key = DEFAULT_DEVICE
-    if region_key not in REGIONS: region_key = DEFAULT_REGION
+# Region definitions (Simulating real SIM cards)
+REGIONS = {
+    'il': {'lang': 'he_IL', 'tz': 'Asia/Jerusalem', 'sim': '42501', 'cc': 'IL'}, # Partner Israel
+    'us': {'lang': 'en_US', 'tz': 'America/New_York', 'sim': '310260', 'cc': 'US'}, # T-Mobile US
+    'de': {'lang': 'de_DE', 'tz': 'Europe/Berlin', 'sim': '26201', 'cc': 'DE'}, # Telekom.de
+}
 
-    base = BASE_DEVICES[device_key]['build_props'].copy()
-    reg = REGIONS[region_key]
-
-    # Fill in the standard Aurora format
-    config = {
-        'UserReadableName': BASE_DEVICES[device_key]['name'],
-        'Locales': f"{reg['lang']},en_US",
-        'TimeZone': reg['tz'],
-        'SimOperator': reg['sim'],
-        'CellOperator': reg['sim'],
-        'Roaming': 'mobile-notroaming',
-        'Client': 'android-google',
-        'GSF.version': '223616055',
-        'Vending.version': '84122900',
-        'Vending.versionString': '41.2.29-23 [0] [PR] 639844241',
-        # Merge build props
-        **base
+# Base device hardware profiles
+BASE_DEVICES = {
+    's23': {
+        'UserReadableName': 'Samsung Galaxy S23',
+        'Build.HARDWARE': 'kalama',
+        'Build.PRODUCT': 'kalama',
+        'Build.DEVICE': 'kalama',
+        'Build.MANUFACTURER': 'samsung',
+        'Build.MODEL': 'SM-S911B',
+        'Build.ID': 'UP1A.231005.007',
+        'Build.BOOTLOADER': 'S911BXXU3BWK5',
+        'Build.VERSION.SDK_INT': '34',
+        'Build.VERSION.RELEASE': '14',
+        'Build.FINGERPRINT': 'samsung/kalama/kalama:14/UP1A.231005.007/S911BXXU3BWK5:user/release-keys',
+        'GL.Version': '196610',
+        'Platforms': 'arm64-v8a,armeabi-v7a,armeabi',
+        'Screen.Density': '480',
+        'Screen.Width': '1080',
+        'Screen.Height': '2340',
+    },
+    'pixel7': {
+        'UserReadableName': 'Google Pixel 7a',
+        'Build.HARDWARE': 'lynx',
+        'Build.PRODUCT': 'lynx',
+        'Build.DEVICE': 'lynx',
+        'Build.MANUFACTURER': 'Google',
+        'Build.MODEL': 'Pixel 7a',
+        'Build.ID': 'UQ1A.231205.015',
+        'Build.BOOTLOADER': 'lynx-1.0-9716681',
+        'Build.VERSION.SDK_INT': '34',
+        'Build.VERSION.RELEASE': '14',
+        'Build.FINGERPRINT': 'google/lynx/lynx:14/UQ1A.231205.015/11084887:user/release-keys',
+        'GL.Version': '196610',
+        'Platforms': 'arm64-v8a,armeabi-v7a,armeabi',
+        'Screen.Density': '420',
+        'Screen.Width': '1080',
+        'Screen.Height': '2400',
     }
+}
+
+DEFAULT_PROPS = {
+    'TouchScreen': '3', 'Keyboard': '1', 'Navigation': '1', 'ScreenLayout': '2',
+    'HasHardKeyboard': 'false', 'HasFiveWayNavigation': 'false',
+    'SharedLibraries': 'android.ext.shared,org.apache.http.legacy',
+    'Client': 'android-google',
+    'GSF.version': '223616055',
+    'Vending.version': '84122900',
+    'Vending.versionString': '41.2.29-23 [0] [PR] 639844241',
+    'Roaming': 'mobile-notroaming',
+    'CellOperator': '310', # Will be overwritten
+    'SimOperator': '38',   # Will be overwritten
+}
+
+# --- 3. HELPER FUNCTIONS ---
+
+def get_device_config(dev_key, reg_key):
+    """Merges Hardware + Region into the exact JSON format Aurora expects."""
+    if dev_key not in BASE_DEVICES: dev_key = 's23'
+    if reg_key not in REGIONS: reg_key = 'il'
+    
+    reg_data = REGIONS[reg_key]
+    hw_data = BASE_DEVICES[dev_key]
+    
+    # Start with defaults
+    config = DEFAULT_PROPS.copy()
+    # Apply Hardware
+    config.update(hw_data)
+    # Apply Region
+    config['Locales'] = f"{reg_data['lang']},en_US"
+    config['TimeZone'] = reg_data['tz']
+    config['SimOperator'] = reg_data['sim']
+    config['CellOperator'] = reg_data['sim']
+    
     return config
 
-def get_cached_auth(arch_key):
-    """Simple file cache for auth tokens."""
-    fpath = AUTH_CACHE_DIR / f'.gplay-auth-{arch_key}.json'
-    if fpath.exists():
+def get_headers(auth, reg_key):
+    reg = REGIONS.get(reg_key, REGIONS['il'])
+    locale = reg['lang'].replace('_', '-')
+    
+    device_info = auth.get('deviceInfoProvider', {})
+    
+    return {
+        'Authorization': f"Bearer {auth.get('authToken')}",
+        'User-Agent': device_info.get('userAgentString', 'Android-Finsky/41.2.29-23'),
+        'X-DFE-Device-Id': auth.get('gsfId', ''),
+        'Accept-Language': locale,
+        'X-DFE-Client-Id': 'am-android-google',
+        'X-DFE-Network-Type': '4',
+        'X-DFE-Content-Filters': '',
+        'X-Limit-Ad-Tracking-Enabled': 'false',
+        'X-DFE-Cookie': auth.get('dfeCookie', ''),
+    }
+
+def get_cached_auth(cache_key):
+    path = AUTH_CACHE_DIR / f".gplay-auth-{cache_key}.json"
+    if path.exists():
         try:
-            return json.loads(fpath.read_text())
+            return json.loads(path.read_text())
         except: pass
     return None
 
-def save_cached_auth(auth, arch_key):
-    fpath = AUTH_CACHE_DIR / f'.gplay-auth-{arch_key}.json'
+def save_cached_auth(auth, cache_key):
     try:
-        fpath.write_text(json.dumps(auth))
+        (AUTH_CACHE_DIR / f".gplay-auth-{cache_key}.json").write_text(json.dumps(auth))
     except: pass
 
-def get_headers(auth, region_key):
-    """Get API headers with correct locale."""
-    reg = REGIONS.get(region_key, REGIONS['il'])
-    locale = reg['lang'].replace('_', '-')
-    return {
-        'Authorization': f"Bearer {auth.get('authToken')}",
-        'X-DFE-Device-Id': auth.get('gsfId'),
-        'Accept-Language': locale,
-        'User-Agent': 'Android-Finsky/41.2.29-23',
-        'X-DFE-Client-Id': 'am-android-google',
-    }
+# --- 4. CORE DOWNLOAD LOGIC ---
 
-# --- CORE LOGIC ---
-
-def get_download_info_internal(pkg, auth, region_key):
+def get_download_info_internal(pkg, auth, reg_key):
     if not HAS_GPAPI: return {'error': 'GPAPI missing'}
     
     headers = {
-        **get_headers(auth, region_key),
+        **get_headers(auth, reg_key),
         'Content-Type': 'application/x-protobuf',
         'Accept': 'application/x-protobuf'
     }
 
-    # 1. Details
+    # A. DETAILS
     try:
+        # Note: We must verify=False for proxies/debug tools to work, 
+        # and standard request timeouts to avoid hanging
         r = requests.get(f'{DETAILS_URL}?doc={pkg}', headers=headers, timeout=15, verify=False)
         wrapper = googleplay_pb2.ResponseWrapper()
         wrapper.ParseFromString(r.content)
-        doc = wrapper.payload.detailsResponse.docV2
         
-        if not doc.docid:
-            return {'error': 'App not found (Region lock or invalid package)'}
+        doc = wrapper.payload.detailsResponse.docV2
+        if not doc.docid: return {'error': 'App not found'}
         
         vc = doc.details.appDetails.versionCode
-        if vc == 0:
-            return {'error': 'App is incompatible or not available in this region'}
-            
+        if vc == 0: return {'error': 'Incompatible/Restricted'}
+        
     except Exception as e:
-        return {'error': f'Details error: {str(e)}'}
+        return {'error': f'Details failed: {e}'}
 
-    # 2. Purchase (Free)
+    # B. PURCHASE
     try:
         requests.post(PURCHASE_URL, headers={**headers, 'Content-Type': 'application/x-www-form-urlencoded'},
                      data=f'doc={pkg}&ot=1&vc={vc}', timeout=10, verify=False)
     except: pass
 
-    # 3. Delivery
+    # C. DELIVERY
     try:
         r = requests.get(f'{DELIVERY_URL}?doc={pkg}&ot=1&vc={vc}', headers=headers, timeout=15, verify=False)
         wrapper = googleplay_pb2.ResponseWrapper()
         wrapper.ParseFromString(r.content)
         data = wrapper.payload.deliveryResponse.appDeliveryData
-
-        if not data.downloadUrl:
-            return {'error': 'No download URL returned'}
-
+        
+        if not data.downloadUrl: return {'error': 'No URL returned'}
+        
         return {
             'package': pkg,
             'versionCode': vc,
@@ -217,9 +229,9 @@ def get_download_info_internal(pkg, auth, region_key):
             'splits': [{'name': s.name or f'split{i}', 'url': s.downloadUrl} for i,s in enumerate(data.split) if s.downloadUrl]
         }
     except Exception as e:
-        return {'error': f'Delivery error: {str(e)}'}
+        return {'error': f'Delivery failed: {e}'}
 
-# --- ROUTES ---
+# --- 5. ROUTES ---
 
 @app.route('/')
 def index(): return send_file('index.html')
@@ -228,14 +240,14 @@ def index(): return send_file('index.html')
 def search():
     q = request.args.get('q')
     reg = request.args.get('region', 'il')
-    hl = REGIONS.get(reg, REGIONS['il'])['lang'].split('_')[0] # he, en...
+    hl = REGIONS.get(reg, REGIONS['il'])['lang'].split('_')[0]
     
     try:
+        # Use cloudscraper for search page to avoid bot detection
         html = SCRAPER.get(f'https://play.google.com/store/search?q={q}&c=apps&hl={hl}&gl={reg}', timeout=10).text
         results = []
-        # Robust regex
         for m in re.finditer(r'href="/store/apps/details\?id=([^"]+)"[^>]*><div[^>]*>([^<]+)</div>', html):
-            if m.group(1) not in [r['package'] for r in results]:
+            if m.group(1) not in [x['package'] for x in results]:
                 results.append({'package': m.group(1), 'title': m.group(2)})
                 if len(results) >= 5: break
         return jsonify({'results': results})
@@ -246,73 +258,83 @@ def search():
 def info(pkg):
     reg = request.args.get('region', 'il')
     hl = REGIONS.get(reg, REGIONS['il'])['lang'].split('_')[0]
-    
     try:
         r = SCRAPER.get(f'https://play.google.com/store/apps/details?id={pkg}&hl={hl}&gl={reg}', timeout=15)
-        if r.status_code == 404: return jsonify({'error': 'App not found'}), 404
         
-        # SAFE REGEX - Fixes the NoneType crash
-        title_match = re.search(r'<h1[^>]*>([^<]+)</h1>', r.text)
-        title = title_match.group(1) if title_match else pkg
-
-        dev_match = re.search(r'<div[^>]*class="Vbfug "[^>]*><span[^>]*>([^<]+)</span>', r.text)
-        dev = dev_match.group(1) if dev_match else "Unknown"
-
-        return jsonify({'title': title, 'developer': dev, 'package': pkg})
-    except Exception as e:
-        logger.error(f"Info Error: {e}")
-        return jsonify({'title': pkg, 'developer': 'Unknown (Error)', 'package': pkg}) # Fallback instead of crash
+        title_m = re.search(r'<h1[^>]*>([^<]+)</h1>', r.text)
+        title = title_m.group(1) if title_m else pkg
+        
+        dev_m = re.search(r'<div[^>]*class="Vbfug "[^>]*><span[^>]*>([^<]+)</span>', r.text)
+        dev = dev_m.group(1) if dev_m else "Unknown"
+        
+        return jsonify({'package': pkg, 'title': title, 'developer': dev})
+    except:
+        return jsonify({'package': pkg, 'title': pkg, 'developer': 'Unknown'})
 
 @app.route('/api/download-info-stream/<path:pkg>')
-def stream_info(pkg):
-    dev_key = request.args.get('device', DEFAULT_DEVICE)
-    reg_key = request.args.get('region', DEFAULT_REGION)
+def stream(pkg):
+    dev_key = request.args.get('device', 's23')
+    reg_key = request.args.get('region', 'il')
     config = get_device_config(dev_key, reg_key)
+    cache_key = f"{dev_key}_{reg_key}"
     
     def generate():
-        cached = get_cached_auth(dev_key + reg_key)
+        # 1. Try Cached
+        cached = get_cached_auth(cache_key)
         if cached:
-            yield f"data: {json.dumps({'type':'progress','msg':'Trying cached token...'})}\n\n"
+            yield f"data: {json.dumps({'type':'progress','msg':'Using cached token...'})}\n\n"
             res = get_download_info_internal(pkg, cached, reg_key)
             if 'error' not in res:
                 yield f"data: {json.dumps({'type':'success', **res})}\n\n"
                 return
+            yield f"data: {json.dumps({'type':'progress','msg':'Cached token failed, getting new one...'})}\n\n"
 
-        for i in range(1, 10):
-            yield f"data: {json.dumps({'type':'progress','msg':f'Generating Token #{i} ({reg_key})...'})}\n\n"
+        # 2. Get New Token Loop (RESTORED ORIGINAL LOGIC)
+        scraper = create_scraper_no_verify() # Must create fresh one or reuse properly
+        headers = {
+            'User-Agent': 'com.aurora.store-4.6.1-70',
+            'Content-Type': 'application/json'
+        }
+        
+        for i in range(1, 8):
+            yield f"data: {json.dumps({'type':'progress','msg':f'Token Attempt #{i}...'})}\n\n"
             try:
-                r = SCRAPER.post(DISPENSER_URL, json=config, headers={'Content-Type':'application/json'}, timeout=30)
-                if r.ok:
+                # This is the EXACT call structure that worked in original code
+                r = scraper.post(DISPENSER_URL, json=config, headers=headers, timeout=30)
+                
+                if r.status_code == 200:
                     auth = r.json()
                     res = get_download_info_internal(pkg, auth, reg_key)
+                    
                     if 'error' not in res:
-                        save_cached_auth(auth, dev_key + reg_key)
+                        save_cached_auth(auth, cache_key)
                         yield f"data: {json.dumps({'type':'success', **res})}\n\n"
                         return
                     else:
                         yield f"data: {json.dumps({'type':'progress','msg':f'Error: {res["error"]}'})}\n\n"
-            except: pass
-            time.sleep(1)
-        
-        yield f"data: {json.dumps({'type':'error', 'msg':'Failed to find working token'})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'type':'progress','msg':f'Dispenser Error: {r.status_code}'})}\n\n"
+                    
+            except Exception as e:
+                yield f"data: {json.dumps({'type':'progress','msg':f'Net Error: {str(e)[:20]}'})}\n\n"
+            
+            time.sleep(1.5) # Don't hammer the server
+            
+        yield f"data: {json.dumps({'type':'error', 'msg':'Failed to get working token after retries'})}\n\n"
 
     return Response(generate(), mimetype='text/event-stream')
 
-# --- PROXY FOR ZIP DOWNLOAD ---
-# This is critical for the "Download ZIP" button to work
+# --- PROXY DOWNLOAD (Fixes CORS/ZIP issues) ---
 @app.route('/proxy-download')
-def proxy_download():
+def proxy_dl():
     url = request.args.get('url')
-    cookie_str = request.args.get('cookie')
+    cookie = request.args.get('cookie')
     name = request.args.get('name', 'file.apk')
     
-    if not url: return "Missing URL", 400
-    
-    headers = {}
-    if cookie_str: headers['Cookie'] = cookie_str
+    headers = {'Cookie': cookie} if cookie else {}
     
     try:
-        r = requests.get(url, headers=headers, stream=True, verify=False, timeout=60)
+        r = requests.get(url, headers=headers, stream=True, verify=False, timeout=120)
         return Response(r.iter_content(chunk_size=8192), 
                         headers={'Content-Disposition': f'attachment; filename="{name}"'},
                         content_type='application/vnd.android.package-archive')
