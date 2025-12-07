@@ -68,6 +68,17 @@
         <div id="search-results"></div>
     </div>
 
+    <!-- הורדה מקישור -->
+    <div class="card">
+        <h2>🔗 הורדה מקישור ישיר</h2>
+        <div class="controls" style="grid-template-columns: 3fr 1fr;">
+            <input type="text" id="direct-url" placeholder="הדבק קישור להורדה (APK, ZIP, וכו')">
+            <button onclick="downloadFromUrl()">הורד</button>
+        </div>
+        <input type="text" id="custom-filename" placeholder="שם קובץ (אופציונלי)" style="margin-top: 10px;">
+        <div id="url-status" style="margin-top: 10px; font-size: 0.9em; opacity: 0.8;"></div>
+    </div>
+
     <!-- אזור הורדה -->
     <div id="status-area" class="status-box"></div>
 </div>
@@ -242,6 +253,58 @@
         if(bytes == 0) return '0 B';
         var k = 1024, sizes = ['B', 'KB', 'MB', 'GB'], i = Math.floor(Math.log(bytes) / Math.log(k));
         return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    async function downloadFromUrl() {
+        const url = document.getElementById('direct-url').value.trim();
+        const filename = document.getElementById('custom-filename').value.trim();
+        const statusEl = document.getElementById('url-status');
+        
+        if(!url) {
+            statusEl.innerHTML = '❌ נא להזין קישור';
+            return;
+        }
+
+        statusEl.innerHTML = '⏳ מוריד קובץ דרך השרת...';
+
+        try {
+            const response = await fetch('/api/download-url', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({url, filename: filename || undefined})
+            });
+
+            if(!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'שגיאה בהורדה');
+            }
+
+            // Get filename from response headers
+            const contentDisp = response.headers.get('content-disposition');
+            let downloadName = 'download.apk';
+            if(contentDisp && contentDisp.includes('filename=')) {
+                downloadName = contentDisp.split('filename=')[1].replace(/"/g, '');
+            }
+
+            // Download file
+            const blob = await response.blob();
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = downloadName;
+            link.click();
+
+            statusEl.innerHTML = `✅ הורדה הושלמה: ${downloadName}`;
+            
+            // Clear inputs
+            setTimeout(() => {
+                document.getElementById('direct-url').value = '';
+                document.getElementById('custom-filename').value = '';
+                statusEl.innerHTML = '';
+            }, 3000);
+
+        } catch(e) {
+            statusEl.innerHTML = `❌ שגיאה: ${e.message}`;
+        }
     }
 </script>
 

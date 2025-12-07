@@ -312,5 +312,42 @@ def proxy_dl():
     except Exception as e:
         return str(e), 500
 
+@app.route('/api/download-url', methods=['POST'])
+def download_url():
+    """Download any file from URL via server"""
+    data = request.json
+    url = data.get('url')
+    filename = data.get('filename', 'download.apk')
+    
+    if not url:
+        return jsonify({'error': 'URL required'}), 400
+    
+    try:
+        # Download file to server
+        logger.info(f"Downloading from URL: {url}")
+        r = requests.get(url, stream=True, verify=False, timeout=60)
+        r.raise_for_status()
+        
+        # Get filename from headers if not provided
+        if filename == 'download.apk':
+            content_disp = r.headers.get('content-disposition', '')
+            if 'filename=' in content_disp:
+                filename = content_disp.split('filename=')[-1].strip('"')
+            else:
+                # Extract from URL
+                filename = url.split('/')[-1].split('?')[0] or 'download.apk'
+        
+        # Stream back to client
+        return Response(
+            r.iter_content(chunk_size=8192),
+            headers={
+                'Content-Disposition': f'attachment; filename="{filename}"',
+                'Content-Type': r.headers.get('content-type', 'application/octet-stream')
+            }
+        )
+    except Exception as e:
+        logger.error(f"Download failed: {e}")
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
